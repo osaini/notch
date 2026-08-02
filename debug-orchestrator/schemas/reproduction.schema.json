@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidate_id", "reproduced", "command", "exit_code", "observed_output", "test_files_changed", "matches_predicted_failure_path", "notes"],
+  "properties": {
+    "candidate_id": { "type": "string", "minLength": 1 },
+    "reproduced": { "type": "boolean" },
+    "command": { "type": ["string", "null"] },
+    "exit_code": { "type": ["integer", "null"] },
+    "observed_output": { "type": ["string", "null"] },
+    "test_files_changed": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "matches_predicted_failure_path": { "type": "boolean" },
+    "notes": { "type": "string", "minLength": 1 }
+  }
+}

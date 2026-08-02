@@ -1,0 +1,104 @@
+{
+  "name": "windows-notch",
+  "version": "0.1.0",
+  "description": "Agent status indicator for Claude Code — a faux notch for Windows",
+  "main": "out/main/index.js",
+  "author": "Oaj Saini",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/osaini/windows-notch.git"
+  },
+  "homepage": "https://github.com/osaini/windows-notch#readme",
+  "bugs": {
+    "url": "https://github.com/osaini/windows-notch/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "electron",
+    "windows",
+    "notch",
+    "overlay",
+    "status-indicator"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && npm run build:mobile && electron-vite build",
+    "build:mobile": "npm --prefix mobile run build",
+    "icons": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generateIcons.ps1",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.scripts.json",
+    "test:tray-icons": "esbuild scripts/renderTrayIcons.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outfile=out/render-tray-icons.cjs --log-level=warning && electron out/render-tray-icons.cjs",
+    "verify": "esbuild scripts/verify.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/verify.cjs --log-level=warning && node out/verify.cjs",
+    "test:status-flash": "esbuild scripts/testStatusFlash.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/test-status-flash.cjs --log-level=warning && node out/test-status-flash.cjs",
+    "demo:status-flash": "esbuild scripts/demoStatusFlash.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/demo-status-flash.cjs --log-level=warning && node out/demo-status-flash.cjs",
+    "test:pill-geometry": "esbuild scripts/testPillGeometry.ts --bundle --platform=node --format=cjs --target=node22 --alias:electron=./scripts/stubs/electron.ts --alias:@shared/types=./src/shared/types.ts --outfile=out/test-pill-geometry.cjs --log-level=warning && node out/test-pill-geometry.cjs",
+    "test:interactions": "esbuild scripts/testInteractions.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/test-interactions.cjs --log-level=warning && node out/test-interactions.cjs",
+    "smoke:managed-codex": "esbuild scripts/smokeManagedCodex.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/smoke-managed-codex.cjs --log-level=warning && node out/smoke-managed-codex.cjs",
+    "hooks:install": "esbuild scripts/manageHooks.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/manage-hooks.cjs --log-level=warning && node out/manage-hooks.cjs install",
+    "hooks:uninstall": "esbuild scripts/manageHooks.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/manage-hooks.cjs --log-level=warning && node out/manage-hooks.cjs uninstall",
+    "launcher:install": "esbuild scripts/manageLauncher.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/manage-launcher.cjs --log-level=warning && node out/manage-launcher.cjs install",
+    "launcher:uninstall": "esbuild scripts/manageLauncher.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/manage-launcher.cjs --log-level=warning && node out/manage-launcher.cjs uninstall",
+    "bugs:preflight": "node debug-orchestrator/orchestrate.mjs preflight",
+    "bugs:scan": "node debug-orchestrator/orchestrate.mjs scan",
+    "bugs:resume": "node debug-orchestrator/orchestrate.mjs resume",
+    "bugs:report": "node debug-orchestrator/orchestrate.mjs report",
+    "bugs:implement": "node debug-orchestrator/orchestrate.mjs implement",
+    "bugs:fix": "node debug-orchestrator/orchestrate.mjs fix",
+    "bugs:test": "node --test debug-orchestrator/test/*.test.mjs",
+    "package": "npm run build && electron-builder --win --dir",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "esbuild": "^0.28.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "resedit": "^3.0.2",
+    "typescript": "^5.7.2",
+    "vite": "^7.3.6"
+  },
+  "build": {
+    "appId": "dev.windowsnotch.app",
+    "productName": "Windows Notch",
+    "afterPack": "scripts/stampExecutableIcon.cjs",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "mobile/dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Notch"
+    }
+  }
+}

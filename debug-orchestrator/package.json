@@ -1,0 +1,26 @@
+{
+  "name": "debug-orchestrator",
+  "version": "0.1.0",
+  "description": "Adversarial two-model bug discovery: Claude and Codex scout the same code, then challenge each other's findings",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "bin": {
+    "debug-orchestrator": "./orchestrate.mjs"
+  },
+  "main": "./orchestrate.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "files": [
+    "orchestrate.mjs",
+    "lib/",
+    "prompts/",
+    "schemas/",
+    "manifest.example.json",
+    "README.md"
+  ]
+}

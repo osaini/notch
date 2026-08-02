@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Implementer report for one round",
+  "type": "object",
+  "required": ["summary", "assumptions", "complete", "responses"],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What was actually changed, in one paragraph."
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "Assumptions the change rests on. The reviewer attacks these first.",
+      "items": { "type": "string" }
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "False when the implementer could not finish. An honest partial result beats an unsupported claim."
+    },
+    "responses": {
+      "type": "array",
+      "description": "One entry per blocking review finding addressed this round. Empty on the first round.",
+      "items": {
+        "type": "object",
+        "required": ["claim", "action", "explanation"],
+        "additionalProperties": false,
+        "properties": {
+          "claim": { "type": "string", "minLength": 1 },
+          "action": {
+            "type": "string",
+            "enum": ["fixed", "disputed", "deferred"],
+            "description": "`disputed` requires the explanation to say why the finding is wrong."
+          },
+          "explanation": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

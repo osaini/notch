@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdicts"],
+  "properties": {
+    "verdicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidate_id",
+          "verdict",
+          "resolves",
+          "rationale",
+          "supporting_evidence",
+          "invalidating_evidence",
+          "minimal_reproduction",
+          "confidence"
+        ],
+        "properties": {
+          "candidate_id": { "type": "string", "minLength": 1 },
+          "verdict": {
+            "type": "string",
+            "enum": ["confirmed", "rejected", "needs_reproduction"]
+          },
+          "resolves": {
+            "type": "string",
+            "enum": ["assessment_1", "assessment_2", "neither"]
+          },
+          "rationale": { "type": "string", "minLength": 1 },
+          "supporting_evidence": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "invalidating_evidence": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "minimal_reproduction": {
+            "type": ["string", "null"]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    }
+  }
+}

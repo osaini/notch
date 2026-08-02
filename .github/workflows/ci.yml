@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    # The app is Windows-only: it shells out to wt.exe and powershell.exe, and
+    # the tray-icon test needs a real Electron on this platform.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Generate icons
+        run: npm run icons
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Status flash
+        run: npm run test:status-flash
+
+      - name: Pill geometry
+        run: npm run test:pill-geometry
+
+      - name: Interactions
+        run: npm run test:interactions
+
+      # Needs a display to construct nativeImage; the Windows runner has one.
+      - name: Tray icons
+        run: npm run test:tray-icons
+
+      - name: Orchestrator tests
+        run: npm run bugs:test
+
+      # `npm run verify` is deliberately absent: it installs and uninstalls
+      # hooks in the real ~/.claude/settings.json. See CONTRIBUTING.md.
+
+      - name: Build
+        run: npm run build

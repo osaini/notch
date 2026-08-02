@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fix batch plan",
+  "type": "object",
+  "required": ["summary", "fixes", "conflicts"],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One paragraph: the shape of this batch and what drove the ordering."
+    },
+    "fixes": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Every supplied finding, exactly once, with its position in the order.",
+      "items": {
+        "type": "object",
+        "required": ["candidate_id", "order", "rationale", "interacts_with"],
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Copied verbatim from the finding this entry sequences."
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Position in the batch, starting at 1. Unique across the batch."
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What makes this safe to do at this point in the order."
+          },
+          "interacts_with": {
+            "type": "array",
+            "description": "Candidate ids sharing a file, symbol, or state with this fix.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "description": "Pairs that cannot both be applied as described. Empty when none.",
+      "items": {
+        "type": "object",
+        "required": ["candidate_ids", "explanation"],
+        "additionalProperties": false,
+        "properties": {
+          "candidate_ids": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "type": "string" }
+          },
+          "explanation": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

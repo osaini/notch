@@ -1,0 +1,19 @@
+node_modules/
+out/
+release/
+mobile/dist/
+*.log
+
+# bug-orchestration runs: raw model output and temporary worktrees
+.debug-runs/
+
+# build info
+*.tsbuildinfo
+
+# agent scratch: .claude/worktrees/ holds full nested checkouts
+.claude/
+
+# secrets
+.env
+.env.*
+!.env.example

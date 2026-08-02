@@ -1,0 +1,54 @@
+{
+  "$comment": "Copy to <your-repo>/debug-orchestrator.json and edit. Every field except `shards` has a default; see lib/config.mjs (MANIFEST_DEFAULTS).",
+
+  "version": 1,
+
+  "packageManager": "npm",
+
+  "baseline": [
+    { "name": "typecheck", "args": ["run", "typecheck"] },
+    { "name": "test", "args": ["run", "test"] },
+    { "name": "lint", "command": "npx", "args": ["eslint", "."] }
+  ],
+
+  "concurrency": { "claude": 2, "codex": 2 },
+
+  "timeoutsMinutes": {
+    "scout": 30,
+    "challenge": 20,
+    "tiebreak": 20,
+    "reproduce": 30,
+    "fixplan": 20,
+    "plan": 30,
+    "critique": 20,
+    "implement": 45,
+    "review": 30
+  },
+
+  "providers": {
+    "claude": { "model": "opus", "effort": "high", "maxBudgetUsdPerJob": 3 },
+    "codex": { "model": "gpt-5.6-sol" }
+  },
+
+  "minimumVersions": { "claude": null, "codex": null },
+
+  "requiredClaudePlugins": [],
+
+  "shards": [
+    {
+      "id": "core",
+      "description": "Domain logic and the invariants the rest of the system relies on",
+      "paths": ["src/core", "src/types.ts"]
+    },
+    {
+      "id": "api",
+      "description": "Request handling, validation, authentication, and trust boundaries",
+      "paths": ["src/api", "src/middleware"]
+    },
+    {
+      "id": "ui",
+      "description": "Component state, rendering, and user interaction",
+      "paths": ["src/ui"]
+    }
+  ]
+}

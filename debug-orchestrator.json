@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "packageManager": "npm",
+  "baseline": [
+    { "name": "typecheck", "args": ["run", "typecheck"] },
+    { "name": "test:status-flash", "args": ["run", "test:status-flash"] },
+    { "name": "test:pill-geometry", "args": ["run", "test:pill-geometry"] },
+    { "name": "test:interactions", "args": ["run", "test:interactions"] }
+  ],
+  "concurrency": {
+    "claude": 2,
+    "codex": 2
+  },
+  "timeoutsMinutes": {
+    "scout": 30,
+    "challenge": 20,
+    "tiebreak": 20,
+    "reproduce": 30,
+    "fixplan": 20,
+    "plan": 30,
+    "critique": 20,
+    "implement": 45,
+    "review": 30
+  },
+  "providers": {
+    "claude": {
+      "model": "opus",
+      "effort": "high",
+      "maxBudgetUsdPerJob": 3
+    },
+    "codex": {
+      "model": "gpt-5.6-sol"
+    }
+  },
+  "requiredClaudePlugins": ["codex@openai-codex"],
+  "shards": [
+    {
+      "id": "main-lifecycle",
+      "description": "Electron lifecycle, windows, sessions, focus, settings, tray, and usage state",
+      "paths": [
+        "src/main/index.ts",
+        "src/main/windows.ts",
+        "src/main/sessionWatcher.ts",
+        "src/main/focus.ts",
+        "src/main/settings.ts",
+        "src/main/tray.ts",
+        "src/main/usage.ts",
+        "src/shared/types.ts"
+      ]
+    },
+    {
+      "id": "hooks-dispatch-ipc",
+      "description": "Hook ingestion, installation, dispatch, managed Codex, preload, and trust boundaries",
+      "paths": [
+        "src/main/hookServer.ts",
+        "src/main/hookInstaller.ts",
+        "src/main/dispatcher.ts",
+        "src/main/managedCodex.ts",
+        "src/preload/index.ts",
+        "src/shared/types.ts"
+      ]
+    },
+    {
+      "id": "desktop-renderer",
+      "description": "React state, status transitions, formatting, hit targets, and desktop interactions",
+      "paths": ["src/renderer", "src/shared/types.ts"]
+    },
+    {
+      "id": "mobile-bridge",
+      "description": "Desktop/mobile bridge protocol, reconnection, synchronization, and mobile UI",
+      "paths": ["src/main/mobileBridge.ts", "mobile/src", "src/shared/types.ts"]
+    },
+    {
+      "id": "automation-packaging",
+      "description": "Verification scripts, hook management, build configuration, packaging, and recovery behavior",
+      "paths": [
+        "scripts",
+        "package.json",
+        "mobile/package.json",
+        "electron.vite.config.ts",
+        "tsconfig.json",
+        "tsconfig.node.json",
+        "tsconfig.web.json",
+        "tsconfig.scripts.json"
+      ]
+    }
+  ]
+}

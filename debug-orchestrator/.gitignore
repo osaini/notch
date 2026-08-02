@@ -1,0 +1,3 @@
+# Raw model output and temporary worktrees. Written into the *target*
+# repository, not here, but repeated so a standalone checkout is covered too.
+.debug-runs/

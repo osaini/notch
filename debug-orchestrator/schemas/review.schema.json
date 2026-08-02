@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Adversarial review of a change",
+  "type": "object",
+  "required": ["verdict", "findings", "rationale"],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["accept", "revise"],
+      "description": "`accept` only when no blocking finding remains."
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One paragraph explaining the verdict."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Problems with the change. Empty is valid and means nothing was found.",
+      "items": {
+        "type": "object",
+        "required": ["severity", "file", "line", "claim", "failure_scenario"],
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["blocking", "should-fix", "nit"],
+            "description": "Only `blocking` prevents acceptance."
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Repository-relative path the finding anchors to."
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "1-indexed line, or 0 when the finding is file-level."
+          },
+          "claim": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What is wrong, in one sentence."
+          },
+          "failure_scenario": {
+            "type": "string",
+            "description": "Concrete inputs or state leading to wrong behaviour. A finding without one is downgraded to a nit during normalization."
+          }
+        }
+      }
+    }
+  }
+}
