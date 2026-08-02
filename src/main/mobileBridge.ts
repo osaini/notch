@@ -24,6 +24,7 @@ const PAIRING_TTL_MS = 10 * 60 * 1000
 // The cookie carrying this token crosses the LAN over plain HTTP on every
 // request, so it is a short-lived credential by design. Re-pairing is cheap.
 const DEVICE_TTL_SECONDS = 30 * 24 * 60 * 60
+const DEVICE_TTL_MS = DEVICE_TTL_SECONDS * 1000
 const HEARTBEAT_MS = 20_000
 const PAIRING_ATTEMPT_WINDOW_MS = 5 * 60 * 1000
 const PAIRING_ATTEMPT_LIMIT = 8
@@ -90,6 +91,8 @@ interface MobileBridgeOptions {
   watcher: SessionWatcher
   getProjects: () => Promise<string[]>
   dispatch: (request: DispatchRequest) => Promise<DispatchResult>
+  /** Injectable so credential-expiry behavior can be tested without waiting. */
+  now?: () => number
 }
 
 class HttpError extends Error {
@@ -320,11 +323,13 @@ export class MobileBridge extends EventEmitter {
     )
   }
 
+  private now(): number {
+    return this.options.now?.() ?? Date.now()
+  }
+
   async start(preferredPort = DEFAULT_MOBILE_PORT): Promise<number> {
     await this.loadDevices()
     this.regeneratePairing()
-    this.watcherListener = () => this.queueBroadcast()
-    this.options.watcher.on('update', this.watcherListener)
 
     for (let offset = 0; offset < PORT_ATTEMPTS; offset++) {
       const port = preferredPort + offset
@@ -332,6 +337,11 @@ export class MobileBridge extends EventEmitter {
         await this.listen(port)
         this.boundPort = port
         this.lastError = undefined
+        // Register only after the listener is live. A failed start must leave
+        // no callback behind, especially because a later attempt replaces the
+        // single reference that stop() knows how to remove.
+        this.watcherListener = () => this.queueBroadcast()
+        this.options.watcher.on('update', this.watcherListener)
         this.heartbeat = setInterval(() => {
           for (const client of this.clients) client.write(': heartbeat\n\n')
         }, HEARTBEAT_MS)
@@ -379,14 +389,16 @@ export class MobileBridge extends EventEmitter {
       urls: [...new Set(urls)],
       pairingCode: this.pairingCode,
       pairingExpiresAt: this.pairingExpiresAt,
-      pairedDevices: this.devices.length,
+      pairedDevices: this.devices.filter(
+        (device) => this.now() - device.pairedAt < DEVICE_TTL_MS
+      ).length,
       error: this.lastError
     }
   }
 
   regeneratePairing(): MobileBridgeStatus {
     this.pairingCode = String(randomInt(100_000, 1_000_000))
-    this.pairingExpiresAt = Date.now() + PAIRING_TTL_MS
+    this.pairingExpiresAt = this.now() + PAIRING_TTL_MS
     this.pairAttemptsForCode = 0
     const status = this.getStatus()
     this.emit('status', status)
@@ -456,7 +468,7 @@ export class MobileBridge extends EventEmitter {
       return
     }
     if (method === 'GET' && url.pathname === '/api/v1/status') {
-      const authenticated = Boolean(this.authorize(req, false))
+      const authenticated = Boolean(await this.authorize(req, false))
       this.sendJson(res, 200, {
         computerName: hostname(),
         authenticated,
@@ -470,7 +482,7 @@ export class MobileBridge extends EventEmitter {
       return
     }
 
-    const authorizedDevice = this.authorize(req, true)
+    const authorizedDevice = await this.authorize(req, true)
 
     if (method === 'DELETE' && url.pathname === '/api/v1/pair') {
       this.assertSafeOrigin(req)
@@ -521,7 +533,7 @@ export class MobileBridge extends EventEmitter {
 
   private async pair(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const remote = req.socket.remoteAddress ?? 'unknown'
-    const now = Date.now()
+    const now = this.now()
     const attempt = this.pairAttempts.get(remote)
     if (attempt && now - attempt.startedAt < PAIRING_ATTEMPT_WINDOW_MS) {
       if (attempt.count >= PAIRING_ATTEMPT_LIMIT) {
@@ -564,7 +576,19 @@ export class MobileBridge extends EventEmitter {
     this.sendJson(res, 200, { ok: true })
   }
 
-  private authorize(req: http.IncomingMessage, required: boolean): StoredDevice | null {
+  private async authorize(
+    req: http.IncomingMessage,
+    required: boolean
+  ): Promise<StoredDevice | null> {
+    const now = this.now()
+    const activeDevices = this.devices.filter(
+      (candidate) => now - candidate.pairedAt < DEVICE_TTL_MS
+    )
+    if (activeDevices.length !== this.devices.length) {
+      this.devices = activeDevices
+      await this.saveDevices()
+      this.emit('status', this.getStatus())
+    }
     const token = cookieValue(req, 'notch_device')
     const tokenHash = token ? hashToken(token) : ''
     const device = tokenHash
@@ -574,7 +598,7 @@ export class MobileBridge extends EventEmitter {
       if (required) throw new HttpError(401, 'Pair this phone with Windows Notch first.')
       return null
     }
-    device.lastSeenAt = Date.now()
+    device.lastSeenAt = now
     return device
   }
 
@@ -736,7 +760,10 @@ export class MobileBridge extends EventEmitter {
       agent,
       cwd: selected,
       prompt,
-      permissionMode: agent === 'codex' ? 'codex-on-request' : 'default'
+      // The phone has no terminal permission UI. Pairing is the explicit trust
+      // grant, so mobile-launched work must use the unattended modes promised
+      // by the companion UI and threat model.
+      permissionMode: agent === 'codex' ? 'codex-bypass' : 'bypassPermissions'
     })
     if (!result.ok) throw new HttpError(500, result.error || 'The agent did not start.')
 
@@ -883,7 +910,17 @@ export class MobileBridge extends EventEmitter {
   private async loadDevices(): Promise<void> {
     try {
       const stored = JSON.parse(await fsp.readFile(this.devicesPath, 'utf8')) as StoredDevices
-      this.devices = Array.isArray(stored.devices) ? stored.devices : []
+      const now = this.now()
+      const devices = Array.isArray(stored.devices) ? stored.devices : []
+      this.devices = devices.filter(
+        (device) =>
+          device &&
+          typeof device.tokenHash === 'string' &&
+          typeof device.pairedAt === 'number' &&
+          Number.isFinite(device.pairedAt) &&
+          now - device.pairedAt < DEVICE_TTL_MS
+      )
+      if (this.devices.length !== devices.length) await this.saveDevices()
     } catch {
       this.devices = []
     }

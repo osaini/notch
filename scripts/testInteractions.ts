@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import fsp from 'node:fs/promises'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -15,16 +18,19 @@ import {
   resolveParkedParents,
   isInactiveClaudeBackground,
   matchCodexTuiProcesses,
-  parseCodexRollout
+  parseCodexRollout,
+  type SessionWatcher
 } from '../src/main/sessionWatcher'
 import { lastAssistantText, trailingQuestion } from '../src/main/transcriptTail'
-import type { SessionState } from '../src/shared/types'
+import type { DispatchRequest, SessionState, SessionsSnapshot } from '../src/shared/types'
 import {
   ManagedCodexService,
   compatibleModelOverride,
   managedCodexResumeArgs,
   waitForRolloutReady
 } from '../src/main/managedCodex'
+import { MobileBridge } from '../src/main/mobileBridge'
+import { SettingsStore } from '../src/main/settings'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
   const started = Date.now()
@@ -952,6 +958,192 @@ async function testManagedCodexProtocol(): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()))
 }
 
+async function testConcurrentSettingsUpdates(): Promise<void> {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'notch-settings-test-'))
+  try {
+    const store = new SettingsStore(dir)
+    await store.load()
+    const emitted: number[] = []
+    store.on('update', (settings) => emitted.push(settings.position.offset))
+
+    const updates = Array.from({ length: 40 }, (_, index) =>
+      store.update({
+        position: {
+          displayId: null,
+          edge: 'top',
+          offset: index / 39
+        }
+      })
+    )
+    const results = await Promise.all(updates)
+    const saved = JSON.parse(
+      await fsp.readFile(path.join(dir, 'settings.json'), 'utf8')
+    ) as { position: { offset: number } }
+
+    assert.equal(results.length, 40)
+    assert.equal(emitted.length, 40)
+    assert.equal(store.get().position.offset, 1)
+    assert.equal(saved.position.offset, 1)
+
+    // One failed transaction rejects only that caller; the serialization
+    // queue must recover for the next update.
+    const blockedPath = path.join(dir, 'blocked-by-file')
+    await fsp.writeFile(blockedPath, 'not a directory', 'utf8')
+    const recovering = new SettingsStore(blockedPath)
+    await recovering.load()
+    await assert.rejects(recovering.update({ theme: 'light' }))
+    assert.equal(recovering.get().theme, 'dark')
+    await fsp.rm(blockedPath)
+    await fsp.mkdir(blockedPath)
+    assert.equal((await recovering.update({ theme: 'light' })).theme, 'light')
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+}
+
+function listen(server: http.Server, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(port, '0.0.0.0', () => {
+      server.removeListener('error', reject)
+      resolve()
+    })
+  })
+}
+
+function closeServer(server: http.Server): Promise<void> {
+  return new Promise((resolve) => server.close(() => resolve()))
+}
+
+async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'notch-mobile-test-'))
+  const expiredToken = 'expired-device-token'
+  const freshToken = 'fresh-device-token'
+  const hash = (token: string): string => createHash('sha256').update(token).digest('hex')
+  const now = Date.now()
+  await fsp.writeFile(
+    path.join(dir, 'mobile-devices.json'),
+    JSON.stringify({
+      devices: [
+        {
+          id: 'expired',
+          name: 'Expired phone',
+          tokenHash: hash(expiredToken),
+          pairedAt: now - 31 * 24 * 60 * 60 * 1000,
+          lastSeenAt: now
+        },
+        {
+          id: 'fresh',
+          name: 'Fresh phone',
+          tokenHash: hash(freshToken),
+          pairedAt: now,
+          lastSeenAt: now
+        }
+      ]
+    }),
+    'utf8'
+  )
+
+  let sessions: SessionState[] = []
+  let clock = now
+  const watcher = new EventEmitter() as EventEmitter & { getSnapshot(): SessionsSnapshot }
+  watcher.getSnapshot = () => ({
+    sessions,
+    color: 'grey',
+    counts: { total: 0, idle: 0, busy: 0, needsInput: 0, reviewing: 0, unknown: 0 },
+    prunedCount: 0,
+    parkedCount: 0,
+    scannedAt: Date.now()
+  })
+  const dispatched: DispatchRequest[] = []
+  const bridge = new MobileBridge({
+    userDataDir: dir,
+    assetsDir: path.join(process.cwd(), 'mobile', 'dist'),
+    watcher: watcher as unknown as SessionWatcher,
+    getProjects: async () => [dir],
+    now: () => clock,
+    dispatch: async (request) => {
+      dispatched.push(request)
+      const agent = request.agent === 'codex' ? 'codex' : 'claude'
+      const sessionId = `${agent}-${dispatched.length}`
+      sessions = [{
+        key: `${agent}:${sessionId}`,
+        agent,
+        sessionId,
+        cwd: dir,
+        name: sessionId,
+        kind: 'cli',
+        status: 'busy',
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+        needsInput: false,
+        canTerminate: true,
+        canFocus: true
+      }]
+      return { ok: true, command: agent, launcher: 'wt', transport: 'legacy-cli' }
+    }
+  })
+  const holders: http.Server[] = []
+  const basePort = 48550
+
+  try {
+    // Exhaust the complete port search twice. Neither failed attempt may leave
+    // an update listener that a later stop can no longer identify.
+    for (let port = basePort; port < basePort + 12; port++) {
+      const server = http.createServer()
+      await listen(server, port)
+      holders.push(server)
+    }
+    await assert.rejects(bridge.start(basePort), /No free port/)
+    await assert.rejects(bridge.start(basePort), /No free port/)
+    assert.equal(watcher.listenerCount('update'), 0)
+    for (const server of holders.splice(0)) await closeServer(server)
+
+    assert.equal(await bridge.start(basePort), basePort)
+    assert.equal(watcher.listenerCount('update'), 1)
+    assert.equal(bridge.getStatus().pairedDevices, 1)
+
+    const origin = `http://127.0.0.1:${basePort}`
+    const expired = await fetch(`${origin}/api/v1/snapshot`, {
+      headers: { cookie: `notch_device=${expiredToken}` }
+    })
+    assert.equal(expired.status, 401)
+
+    const dispatchFromPhone = async (agent: 'claude' | 'codex'): Promise<void> => {
+      const response = await fetch(`${origin}/api/v1/dispatch`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          cookie: `notch_device=${freshToken}`
+        },
+        body: JSON.stringify({ agent, cwd: dir, prompt: `Run ${agent}` })
+      })
+      assert.equal(response.status, 201)
+    }
+    await dispatchFromPhone('claude')
+    await dispatchFromPhone('codex')
+    assert.equal(dispatched[0].permissionMode, 'bypassPermissions')
+    assert.equal(dispatched[1].permissionMode, 'codex-bypass')
+
+    // Expiry is enforced by each authorization check, not only when the bridge
+    // happens to restart and reload its device file.
+    clock += 31 * 24 * 60 * 60 * 1000
+    const expiredWhileRunning = await fetch(`${origin}/api/v1/snapshot`, {
+      headers: { cookie: `notch_device=${freshToken}` }
+    })
+    assert.equal(expiredWhileRunning.status, 401)
+    assert.equal(bridge.getStatus().pairedDevices, 0)
+
+    bridge.stop()
+    assert.equal(watcher.listenerCount('update'), 0)
+    assert.equal(await bridge.start(basePort), basePort)
+  } finally {
+    bridge.stop()
+    for (const server of holders) await closeServer(server)
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+}
+
 async function main(): Promise<void> {
   await testClaudeNormalizationAndRoundTrip()
   await testHookAuthorization()
@@ -965,6 +1157,8 @@ async function main(): Promise<void> {
   testCodexTuiProcessMatching()
   await testManagedCodexDispatchLaunch()
   await testManagedCodexProtocol()
+  await testConcurrentSettingsUpdates()
+  await testMobileBridgeSecurityAndLifecycle()
   console.log('Interaction tests passed.')
 }
 
