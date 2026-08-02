@@ -56,6 +56,13 @@ function normalize(raw: unknown, current = DEFAULT_SETTINGS): AppSettings {
 export class SettingsStore extends EventEmitter {
   private readonly filePath: string
   private value: AppSettings = DEFAULT_SETTINGS
+  /**
+   * Settings can arrive faster than the filesystem can persist them (the
+   * position slider is the common case). Keep the merge, write, and event in
+   * one ordered transaction so concurrent callers neither race over the same
+   * temporary file nor let an older snapshot win on disk.
+   */
+  private updateWork: Promise<void> = Promise.resolve()
 
   constructor(userDataDir: string) {
     super()
@@ -75,25 +82,37 @@ export class SettingsStore extends EventEmitter {
     return this.value
   }
 
-  async update(patch: Partial<AppSettings>): Promise<AppSettings> {
-    const merged: AppSettings = {
-      ...this.value,
-      ...patch,
-      position: {
-        ...this.value.position,
-        ...(patch.position ?? {})
+  update(patch: Partial<AppSettings>): Promise<AppSettings> {
+    const result = this.updateWork.then(async () => {
+      const current = this.value
+      const merged: AppSettings = {
+        ...current,
+        ...patch,
+        position: {
+          ...current.position,
+          ...(patch.position ?? {})
+        }
       }
-    }
-    this.value = normalize(merged, this.value)
-    await this.save()
-    this.emit('update', this.value)
-    return this.value
+      const next = normalize(merged, current)
+      await this.save(next)
+      // Do not expose a value that failed to reach disk, and do not emit an
+      // update whose side effects cannot survive a restart.
+      this.value = next
+      this.emit('update', next)
+      return next
+    })
+    // A failed write rejects its own caller but must not poison later updates.
+    this.updateWork = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result
   }
 
-  private async save(): Promise<void> {
+  private async save(value: AppSettings): Promise<void> {
     await fsp.mkdir(path.dirname(this.filePath), { recursive: true })
     const temporary = `${this.filePath}.tmp`
-    await fsp.writeFile(temporary, `${JSON.stringify(this.value, null, 2)}\n`, 'utf8')
+    await fsp.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
     await fsp.rename(temporary, this.filePath)
   }
 }
