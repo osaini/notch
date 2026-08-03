@@ -57,6 +57,13 @@ jobs:
       - name: Interactions
         run: npm run test:interactions
 
+      # Checks BOTH platforms' contracts on whichever runner this is, including
+      # the invariant that no user-controlled value is ever concatenated into an
+      # argument. That one guards a command-injection path reachable from the
+      # phone companion, so it must not wait for a macOS runner to be involved.
+      - name: Platform contract
+        run: npm run test:platform-contract
+
       # Covers the 0.1.x -> 0.2.0 hook marker and backup migration. Safe for CI:
       # it redirects HOME/USERPROFILE at a temp directory and asserts the redirect
       # took before touching anything.

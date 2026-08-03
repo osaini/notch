@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict'
 import type { ScreenEdge } from '../src/shared/types'
 import { NotchWindow, OVERLAY_HEIGHT, OVERLAY_WIDTH } from '../src/main/windows'
+import { win32Platform } from '../src/main/platform/win32'
 
 interface Point {
   x: number
@@ -24,7 +25,14 @@ interface Geometry {
   fitPaint(paint: Point, edge: ScreenEdge): Point
 }
 
-const geometry = new NotchWindow() as unknown as Geometry
+/**
+ * The overlay integration is injected rather than taken from the host platform,
+ * for two reasons: the numbers below are the *Windows* thresholds and should stay
+ * asserted on a macOS runner, and the fake display carries only `bounds`, so a
+ * platform reading `workArea` would silently produce NaN geometry instead of a
+ * failed assertion.
+ */
+const geometry = new NotchWindow(win32Platform.overlay) as unknown as Geometry
 const display = { bounds: { x: 0, y: 0, width: 1920, height: 1080 } }
 
 const PILL_THICKNESS = 32

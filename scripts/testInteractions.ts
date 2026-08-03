@@ -33,6 +33,7 @@ import {
 } from '../src/main/managedCodex'
 import { MobileBridge } from '../src/main/mobileBridge'
 import { SettingsStore } from '../src/main/settings'
+import { win32Platform } from '../src/main/platform/win32'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
   const started = Date.now()
@@ -768,6 +769,10 @@ async function testManagedCodexDispatchLaunch(): Promise<void> {
 
   const service = new ManagedCodexService({
     endpoint,
+    // Pinned to the Windows terminal rather than the host's, so the exact wt.exe
+    // argv below stays asserted on a macOS runner too. agentPlans is pure, so
+    // this observes real Windows behaviour rather than a stand-in.
+    terminal: win32Platform.terminal,
     launchDetached: async (exe, args) => {
       assert.equal(rolloutCompleted, true)
       launches.push({ exe, args })

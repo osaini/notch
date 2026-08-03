@@ -54,7 +54,8 @@ npm run typecheck            # main, renderer, and scripts
 npm run test:status-flash
 npm run test:pill-geometry
 npm run test:interactions
-npm run test:hook-migration  # the 0.1.x -> 0.2.0 hook marker migration
+npm run test:platform-contract  # both platforms' contracts, on either OS
+npm run test:hook-migration     # the 0.1.x -> 0.2.0 hook marker migration
 npm run test:tray-icons      # runs under Electron
 npm run bugs:test            # debug-orchestrator unit tests
 ```

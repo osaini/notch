@@ -16,6 +16,13 @@ export const paths: PathIntegration = {
   },
 
   isRevealable(target) {
+    // `//host/share` is a perfectly *absolute* POSIX path, so an isAbsolute check
+    // alone lets a network location through. macOS does not auto-mount from one
+    // the way Windows does from a UNC path, so this is not the same
+    // credential-leak vector — but no real project directory starts with `//`,
+    // and keeping the rule identical on both platforms is worth more than the
+    // nothing it costs.
+    if (target.startsWith('//') || target.startsWith('\\\\')) return false
     return path.isAbsolute(target)
   }
 }

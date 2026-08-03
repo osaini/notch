@@ -14,6 +14,7 @@ import type {
 } from '@shared/types'
 import { platform } from './platform'
 import { runFirstWorkingPlan, spawnDetached } from './platform/launch'
+import type { TerminalIntegration } from './platform/types'
 
 interface RpcMessage {
   id?: number | string
@@ -42,6 +43,12 @@ interface CodexModel {
 interface ManagedCodexOptions {
   endpoint?: string
   launchDetached?: (exe: string, args: string[]) => Promise<void>
+  /**
+   * Injectable so a test can pin one platform's argv while running on another.
+   * `agentPlans` is pure, so `testInteractions.ts` passes `win32Platform.terminal`
+   * and keeps asserting the exact `wt.exe` command line on a macOS runner.
+   */
+  terminal?: TerminalIntegration
   rolloutTimeoutMs?: number
   rolloutPollMs?: number
 }
@@ -195,6 +202,7 @@ export class ManagedCodexService extends EventEmitter {
   private starting: Promise<void> | null = null
   private configuredEndpoint?: string
   private launchDetached: (exe: string, args: string[]) => Promise<void>
+  private terminal: TerminalIntegration
   private rolloutTimeoutMs: number
   private rolloutPollMs: number
   private stopping = false
@@ -209,6 +217,7 @@ export class ManagedCodexService extends EventEmitter {
     super()
     this.configuredEndpoint = options.endpoint
     this.launchDetached = options.launchDetached ?? spawnDetached
+    this.terminal = options.terminal ?? platform.terminal
     this.rolloutTimeoutMs = options.rolloutTimeoutMs ?? START_TIMEOUT_MS
     this.rolloutPollMs = options.rolloutPollMs ?? ROLLOUT_POLL_MS
   }
@@ -280,14 +289,29 @@ export class ManagedCodexService extends EventEmitter {
     const codexArgs = managedCodexResumeArgs(this.state.endpoint!, threadId)
     // The plans are built up front because the error paths below report the
     // command that *would* have run, before any launch is attempted.
-    const plans = platform.terminal.agentPlans({
+    const plans = this.terminal.agentPlans({
       cwd: request.cwd,
       exe: 'codex',
       args: codexArgs
     })
     const primary = plans[0]
     const command = primary?.display ?? ''
-    const launcher = primary?.launcher ?? platform.terminal.primaryLauncher
+    const launcher = primary?.launcher ?? this.terminal.primaryLauncher
+    // No plans means this platform has no terminal integration yet. Bail before
+    // starting a turn, so we never leave one running headlessly with nothing to
+    // show the user — the same guarantee the rollout-failure path gives.
+    if (plans.length === 0) {
+      this.threads.delete(threadId)
+      return {
+        ok: false,
+        command,
+        launcher,
+        transport: 'managed-codex',
+        sessionId: threadId,
+        threadId,
+        error: `Launching a terminal is not available on ${platform.os} yet.`
+      }
+    }
     const rolloutPath = string(thread?.path)
     if (!rolloutPath) {
       this.threads.delete(threadId)

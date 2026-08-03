@@ -127,10 +127,23 @@ npm run typecheck
 npm run test:status-flash
 npm run test:pill-geometry
 npm run test:interactions
+npm run test:platform-contract
 npm run test:hook-migration
 npm run test:tray-icons     # runs under Electron
 npm run bugs:test
 ```
+
+**`npm run test:platform-contract` is the one to run first and most often.** It
+imports *both* platform trees directly, so it holds the darwin implementations to
+the rules in §2 while running on Windows — which is the only way the author can
+check your work at all. It already caught a real permissiveness bug in
+`darwin/paths.ts`. It also enforces the §6 security invariant, so it fails an
+interpolating terminal implementation before review does.
+
+Because `agentPlans` is pure, tests pin one platform's argv while running on the
+other: `testPillGeometry.ts` passes `win32Platform.overlay`, and
+`testInteractions.ts` passes `win32Platform.terminal` to `ManagedCodexService`.
+Follow that pattern rather than gating a test to one OS.
 
 `npm run verify` is **not** side-effect-free — it installs and uninstalls hooks in
 your real `~/.claude/settings.json`. Run it deliberately, and check it restores
