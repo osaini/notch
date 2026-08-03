@@ -1,32 +1,63 @@
-# Windows Notch
+# Notch
 
-**A faux MacBook notch for Windows that tells you what your coding agents are doing.**
+**A faux MacBook notch that tells you what your coding agents are doing.**
 
 An always-on-top status indicator for Claude Code, Codex, and Claude Design. The collapsed pill
 shows live agent counts; hovering expands it into sessions, permission controls, usage, dispatch, a
 file tray, and settings. It answers permission prompts without you switching windows, and it never
 appears in the taskbar or Alt-Tab.
 
+On Windows the notch is the joke. On a MacBook it is competition.
+
 <p align="center">
   <img src="docs/notch.png" alt="The notch expanded, showing the Sessions tab with a working Claude session and installed permission controls" width="520">
 </p>
 
+## Platform support
+
+**Windows 10/11 is supported and verified.** macOS support is **in progress** — the platform
+boundary exists (`src/main/platform/`) and the Windows half is complete, but the macOS
+implementations are still stubs, so it builds and launches with several features degraded. See
+[PORTING.md](PORTING.md). Linux is not supported.
+
 ## Install
 
-```powershell
-git clone https://github.com/osaini/windows-notch.git
-cd windows-notch
+```sh
+git clone https://github.com/osaini/notch.git
+cd notch
 npm install
-npm run icons
 npm run dist
 ```
 
-Run the installer from `release\`, then press **Win**, type **notch**, Enter. Windows 10/11 and
-Node 22+ are required; see [Requirements](#requirements) for the agent CLIs.
+Node 22+ is required; see [Requirements](#requirements) for the agent CLIs. If you would rather run
+from source, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Windows
+
+Run the installer from `release\`, then press **Win**, type **notch**, Enter.
 
 The installer is unsigned, so SmartScreen shows "Windows protected your PC" the first time —
-**More info** → **Run anyway**. If you would rather run from source, see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+**More info** → **Run anyway**.
+
+> **Upgrading from Windows Notch 0.1.x:** uninstall it first. 0.2.0 renamed the app, which makes
+> Windows treat it as a different product — both will install side by side, and if launch-at-login
+> was on, both will run and fight over ports 47821 and 47822. Your hook entries are migrated
+> automatically on first launch; the pristine `settings.json` backup is preserved. Notch settings and
+> paired phones reset, so re-pair any phone (a 6-digit code, ten seconds).
+
+### macOS
+
+Drag `Notch.app` out of the `.dmg` in `release/` into Applications.
+
+The app is **not signed or notarized** — this project has no Apple Developer ID — so Gatekeeper
+blocks it on first run. Either:
+
+- right-click `Notch.app` → **Open**, then **System Settings → Privacy & Security → Open Anyway**; or
+- `xattr -dr com.apple.quarantine /Applications/Notch.app`
+
+The second command removes the quarantine flag macOS puts on anything downloaded from the internet,
+which is what makes Gatekeeper check it at all. Only do that for a build you compiled yourself or
+whose checksum you have verified against `SHA256SUMS.txt` on the release.
 
 ## Security
 
@@ -54,22 +85,29 @@ The aggregate priority is red > blue > yellow > green.
 
 ## Requirements
 
-- Windows 10/11
+- Windows 10/11 (verified), or macOS (in progress — see [Platform support](#platform-support))
 - Node.js 22+
 - Claude Code — tested against 2.1.220
 - Codex is optional — tested with Codex Desktop and `codex-cli 0.130.0-alpha.5`
-- Claude Design is optional — tested with Claude Desktop 1.24012.9 (MSIX)
-- Windows Terminal is preferred for dispatch; a safely encoded PowerShell console is the fallback
+- Claude Design is optional, and Windows-only — tested with Claude Desktop 1.24012.9 (MSIX)
+- On Windows: Windows Terminal is preferred for dispatch; a safely encoded PowerShell console is the
+  fallback
 
 Claude and Codex session/transcript formats are undocumented internals and can change between
 versions.
 
 ## Running from source
 
-If you are developing rather than installing, the Start menu shortcut is the easiest everyday
-launch:
+For development, on either platform:
 
-```powershell
+```sh
+npm install
+npm run dev
+```
+
+On Windows, the Start menu shortcut is the easiest everyday launch:
+
+```sh
 npm install
 npm run build
 npm run launcher:install
@@ -80,40 +118,34 @@ against the built `out/` bundle, so after changing source you only re-run `npm r
 shortcut picks it up with no reinstall. Launching again while it is already running expands the
 panel for a moment so you can see it is alive.
 
-`npm run launcher:uninstall` removes the shortcut.
-
-For development:
-
-```powershell
-npm install
-npm run dev
-```
+`npm run launcher:uninstall` removes the shortcut. It is a Windows-only convenience; on macOS use
+`npm run dev`.
 
 For the production bundle:
 
-```powershell
+```sh
 npm run package
 ```
 
-Then open:
+Then open `release/win-unpacked/Notch.exe` or `release/mac-arm64/Notch.app`, depending on the host.
 
-```text
-release\win-unpacked\Windows Notch.exe
-```
+To build the installer for the host platform:
 
-To build the installer:
-
-```powershell
+```sh
 npm run dist
 ```
 
-The installer creates Start menu and desktop shortcuts named **Notch**. Settings also has a
-**Launch at Windows sign-in** toggle. Choosing Quit fully exits the app; reopen it from either
-shortcut, or double-click the unpacked executable.
+`npm run dist:win` and `npm run dist:mac` force a specific target.
 
-This repository produces unsigned Windows binaries. A managed Windows Application Control policy
-may block a newly rebuilt portable executable by hash. `npm start` uses Electron's development
-runtime and remains the local fallback; signing is required for general distribution.
+On Windows the installer creates Start menu and desktop shortcuts named **Notch**. Settings also has
+a **Launch at sign-in** toggle. Choosing Quit fully exits the app; reopen it from either shortcut, or
+double-click the unpacked executable.
+
+This repository produces **unsigned** binaries on both platforms: there is no code-signing
+certificate and no Apple Developer ID. On Windows, a managed Application Control policy may block a
+newly rebuilt portable executable by hash — `npm start` uses Electron's development runtime and
+remains the local fallback. On macOS the bundle is only ad-hoc signed, so Gatekeeper needs the
+one-time override described under [Install](#macos). Signing is required for general distribution.
 
 Other commands:
 
@@ -217,6 +249,11 @@ one JSON line per sweep — re-spawning PowerShell on each sweep would cost more
 the notch does. If the helper cannot be kept alive, the Sessions tab says so and design rows
 disappear rather than going stale.
 
+**This feature is Windows-only and will stay that way.** It depends on reading another
+application's window titles, which macOS does not allow without Screen Recording permission — see
+"Deliberately not included" below. On macOS the Sessions tab hides the affordance rather than showing
+an error.
+
 **What this can and cannot tell you.** Presence is the entire signal. An open design window is
 reported `idle` with the raw status `window-open`, and the row reads **Open**, not *Idle* — the notch
 has no way to know whether Design is mid-generation. It contributes green, never yellow or red.
@@ -284,9 +321,9 @@ meter is not presented as a plan percentage.
 
 Choose Claude Code or Codex, a recent project, prompt, and agent-specific permission/approval mode.
 The project control includes a native **Browse…** button, so any local directory can be selected
-through Windows File Explorer. A browsed directory is added to the current recent-project list.
+through the OS file picker. A browsed directory is added to the current recent-project list.
 
-Primary launcher:
+Primary launcher on Windows:
 
 ```text
 wt.exe -d <cwd> -- <claude|codex> <args...>
@@ -297,16 +334,19 @@ interpret prompt punctuation as pane syntax.
 
 When Windows Terminal is absent, the app opens a new PowerShell console. Every user-controlled
 value is base64-decoded inside a fixed script and invoked as an argument array; no prompt text is
-interpolated into shell syntax.
+interpolated into shell syntax. **That last property is a project invariant, not an implementation
+detail** — see [SECURITY.md](SECURITY.md). Terminal launching on macOS is not implemented yet, and
+the Dispatch tab says so.
 
 The Tray holds dropped file paths and appends them to the next dispatch as references. Files are not
 copied or uploaded.
 
 ## Session actions
 
-- **Focus** walks Claude's process ancestors to the first visible host window and calls
+- **Focus** walks Claude's process ancestors to the first visible host window and, on Windows, calls
   `SetForegroundWindow`. Windows Terminal exposes a window, not a stable public tab API, so the
-  exact tab remains best-effort.
+  exact tab remains best-effort. Not implemented on macOS yet; it reports that rather than failing
+  silently.
 - Codex Focus selects the Codex Desktop window, with the newest Windows Terminal window as fallback.
 - Claude Design Focus foregrounds the recorded `HWND` directly — no ancestor walk, no guessing.
 - **End** asks for confirmation, terminates a Claude PID, verifies that it died, then suppresses the
@@ -387,7 +427,7 @@ src/
     windows.ts          overlay, positioning, dragging and native hover detection
     settings.ts         persisted application settings
     sessionWatcher.ts   Claude PID sessions + Codex rollout state + Claude Design windows
-    designWatcher.ts    long-lived PowerShell sweep for Claude Design windows
+    designWatcher.ts    Claude Design window presence: lifecycle, backoff, parsing
     hookServer.ts       HTTP hooks and pending permission decisions
     hookInstaller.ts    reversible Claude settings merge
     usage.ts            incremental Claude + Codex usage and plan caches
@@ -397,11 +437,20 @@ src/
     mobileBridge.ts     paired phone API, SSE, transcripts and static PWA host
     transcriptTail.ts   extracts a turn's closing question from a transcript
     agentVersions.ts    probes the installed agent CLI versions
-    focus.ts            best-effort Windows host-window focus
+    focus.ts            best-effort host-window focus
     tray.ts             status tray icon and menu
+    trayRender.ts       the tray mark as pure pixels, shared by both platforms
+    platform/           EVERYTHING OS-specific, and the only process.platform
+      types.ts          the contract: focus, window enumeration, process listing,
+                        terminals, autostart, overlay geometry, tray, paths
+      index.ts          selects win32 or darwin; the one branch in the app
+      launch.ts         spawn helper + "try launch plans in order"
+      win32/            complete
+      darwin/           in progress — see PORTING.md
   preload/index.ts      context-isolated renderer API
   renderer/
     App.tsx             shell, tab router and expand logic
+    platform.tsx        host OS copy and feature flags, fetched once
     statusFlash.ts      status-change flash priority state machine
     format.ts           duration and path formatting
     emptyUsage.ts       empty-state usage snapshot
@@ -414,6 +463,7 @@ src/
       Settings.tsx
   shared/types.ts       every cross-boundary type
 scripts/                verify, hook/launcher install, tests, icon generation
+electron-builder.yml    packaging config, in YAML so it can explain itself
 mobile/                 installable React phone companion (separate package)
 debug-orchestrator/     adversarial Claude+Codex bug-discovery pipeline
 docs/                   design notes
@@ -429,12 +479,20 @@ docs/                   design notes
 - Busy/idle, project names, or usage for Claude Design — it is a claude.ai surface with no local
   state, so window presence is all the notch can honestly report
 - Closing or terminating a Claude Design window, which shares one process with Claude Desktop
+- **Claude Design detection on macOS.** Not an unfinished feature — a decision. Detection matches on
+  the Design window's *title*, and macOS redacts other applications' window titles without Screen
+  Recording permission. Because permission grants are tied to the code signature and this app is
+  ad-hoc signed, the grant would be revoked on every rebuild — so it would mean re-authorising screen
+  access after every update, for a presence dot. See [PORTING.md](PORTING.md).
+- Signing or notarization on either platform, and therefore auto-update
+- Linux
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development loop, the check suite, and the two
-Windows packaging quirks that look like bugs and are not. Security issues go through
-[SECURITY.md](SECURITY.md), not the public issue tracker.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development loop, the check suite, and the packaging
+quirks that look like bugs and are not. If you are working on macOS support, start with
+[PORTING.md](PORTING.md). Security issues go through [SECURITY.md](SECURITY.md), not the public issue
+tracker.
 
 ## License
 

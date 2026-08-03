@@ -15,7 +15,7 @@ prompts. That is useful and it is also the risk.
 ### What the app can do on your machine
 
 - **Launches agents in terminals.** The Dispatch tab spawns `claude`, `codex`,
-  or a pair of them via `wt.exe` in a directory you choose, and it can request
+  or a pair of them in a terminal, in a directory you choose, and it can request
   `bypassPermissions` / `--dangerously-bypass-approvals-and-sandbox`. Anything
   that can drive the renderer can therefore run code as you, in any directory.
   Arguments are always passed as an argv array, never as a shell string, so
@@ -45,6 +45,28 @@ to **all interfaces**, not just loopback. When it is on:
 
 Only enable it on a network you trust, and never port-forward it or expose it
 through a tunnel. `Unpair all phones` revokes every device immediately.
+
+### Project invariants
+
+These are not style preferences. They are properties the threat model above
+depends on, and a change that breaks one is a security regression even if
+everything still works.
+
+- **User-controlled values never enter shell or terminal-command syntax.**
+  Launching is always `(executable, argvArray)`. Where a value must cross into a
+  shell — the Windows no-Windows-Terminal fallback — it is base64-encoded and
+  decoded *inside* a fixed program, then applied as an argument array. Prompts
+  routinely contain quotes, `;`, `$(` and newlines, and a prompt can arrive from
+  the phone companion, so interpolating one is remote command execution.
+  This matters most for anything built on AppleScript, whose `do script` takes a
+  shell string. See PORTING.md §6.
+- **No OS permission prompt fires on the startup path.** Anything that needs an
+  Accessibility, Automation or Screen Recording grant must be triggered by an
+  explicit user action, and must degrade cleanly when denied. An overlay that asks
+  for screen access the moment it launches is indistinguishable from something
+  malicious.
+- **No native addons.** Runtime dependencies are exactly `ws`, enforced in CI. It
+  keeps the audit surface to code in this repository plus one well-known library.
 
 ### Hardening already in place
 
