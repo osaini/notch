@@ -31,7 +31,7 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && npm run build:mobile && electron-vite build",
     "build:mobile": "npm --prefix mobile run build",
-    "icons": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generateIcons.ps1",
+    "icons": "esbuild scripts/generateIcons.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outfile=out/generate-icons.cjs --log-level=warning && electron out/generate-icons.cjs",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.scripts.json",
     "test:tray-icons": "esbuild scripts/renderTrayIcons.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outfile=out/render-tray-icons.cjs --log-level=warning && electron out/render-tray-icons.cjs",
@@ -53,8 +53,10 @@
     "bugs:implement": "node debug-orchestrator/orchestrate.mjs implement",
     "bugs:fix": "node debug-orchestrator/orchestrate.mjs fix",
     "bugs:test": "node --test debug-orchestrator/test/*.test.mjs",
-    "package": "npm run build && electron-builder --win --dir",
-    "dist": "npm run build && electron-builder --win"
+    "package": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
     "ws": "^8.21.1"
@@ -74,34 +76,5 @@
     "resedit": "^3.0.2",
     "typescript": "^5.7.2",
     "vite": "^7.3.6"
-  },
-  "build": {
-    "//appId": "Persisted identity: this string decides app.getPath('userData'). Changing it orphans settings.json, the usage cache and paired mobile devices, and makes NSIS treat the result as a different product that can install alongside the old one.",
-    "appId": "dev.notch.app",
-    "productName": "Notch",
-    "afterPack": "scripts/stampExecutableIcon.cjs",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "out/**/*",
-      "mobile/dist/**/*",
-      "package.json"
-    ],
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        "nsis"
-      ],
-      "signAndEditExecutable": false
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "perMachine": false,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Notch"
-    }
   }
 }

@@ -1,0 +1,105 @@
+# Packaging configuration.
+#
+# Moved out of package.json's "build" key so it can carry comments: several of the
+# settings below look wrong and are not, and one of them (appId) is a persisted
+# identity that must not be casually changed. electron-builder validates its
+# config against a strict schema and rejects unknown keys, so JSON has no way to
+# say any of this in place.
+
+# PERSISTED IDENTITY — not just a name.
+#
+# This string decides app.getPath('userData'), so changing it orphans the user's
+# settings.json, the usage cache, and every paired mobile device. It also makes
+# NSIS treat the result as a different product, which can install alongside the
+# old one — and if launchAtLogin was on, both then run and fight over ports
+# 47821/47822. requestSingleInstanceLock does not help: the lock is per-app
+# identity, so two differently-named installs are two different apps.
+#
+# It must also stay byte-identical to app.setAppUserModelId() in
+# src/main/index.ts, or Windows taskbar pinning silently stops working.
+appId: dev.notch.app
+productName: Notch
+
+# One hook, dispatched per platform — electron-builder accepts only one.
+afterPack: scripts/afterPack.cjs
+
+directories:
+  output: release
+
+files:
+  - out/**/*
+  - mobile/dist/**/*
+  - package.json
+
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+  # signAndEditExecutable: false is deliberate. electron-builder's rcedit step
+  # needs symlink privileges to unpack its tool archive, which is not a
+  # reasonable thing to require of a contributor. scripts/stampExecutableIcon.cjs
+  # applies the icon with resedit in pure JS instead. Please don't re-enable
+  # rcedit without checking that a non-elevated build still works.
+  #
+  # The installer is also unsigned: SmartScreen will warn on first run. Signing
+  # needs a certificate this project does not have.
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Notch
+
+mac:
+  # icon is the 512px PNG on purpose. electron-builder derives the .icns from any
+  # >=512px PNG using its bundled app-builder, cross-platform — so there is no
+  # .icns to generate, commit, or keep in sync.
+  icon: build/icon.png
+  category: public.app-category.developer-tools
+
+  # There is no Apple Developer ID for this project.
+  #
+  # identity: null disables signing. scripts/adhocSignMac.cjs then ad-hoc signs
+  # the bundle in afterPack, because arm64 macOS refuses to execute a *wholly*
+  # unsigned binary — so "unsigned" here has to mean "signed with the ad-hoc
+  # identity", which asserts nothing and needs no certificate.
+  #
+  # Do NOT enable hardenedRuntime, entitlements, or notarization. All three
+  # require a Developer ID this project does not have, and turning them on
+  # produces build failures that look like configuration bugs. A PR that adds one
+  # will be closed. See PORTING.md.
+  #
+  # Consequence for users: an ad-hoc signature carries no notarization ticket, so
+  # Gatekeeper blocks a downloaded copy until they right-click -> Open, or clear
+  # the quarantine attribute. That is documented in the README.
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+  target:
+    # Both arches are built; an arm64 runner cross-builds x64 fine. `universal`
+    # is skipped deliberately — it doubles the download and needs mergeASARs.
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+
+  extendInfo:
+    # Keeps a tray-only overlay out of the Dock and out of Cmd-Tab.
+    # src/main/platform/darwin/overlay.ts also calls app.dock.hide() so that
+    # `npm run dev`, which has no Info.plist of ours, behaves the same way.
+    LSUIElement: true
+    # Shown the first time the app drives Terminal.app through osascript. Present
+    # up front so that permission prompt is never unexplained.
+    NSAppleEventsUsageDescription: Notch opens the terminal window a session is running in.
+
+dmg:
+  # No auto-update in this project, so there is no update metadata to write.
+  writeUpdateInfo: false
