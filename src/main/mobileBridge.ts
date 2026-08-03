@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import http from 'node:http'
-import { networkInterfaces, hostname } from 'node:os'
+import { networkInterfaces, hostname, homedir } from 'node:os'
 import path from 'node:path'
 import type {
   AgentKind,
@@ -316,11 +316,7 @@ export class MobileBridge extends EventEmitter {
   constructor(private readonly options: MobileBridgeOptions) {
     super()
     this.devicesPath = path.join(options.userDataDir, 'mobile-devices.json')
-    this.claudeProjectsDir = path.join(
-      process.env.USERPROFILE || process.env.HOME || '',
-      '.claude',
-      'projects'
-    )
+    this.claudeProjectsDir = path.join(homedir(), '.claude', 'projects')
   }
 
   private now(): number {
