@@ -7,9 +7,14 @@ on:
 
 jobs:
   check:
-    # The app is Windows-only: it shells out to wt.exe and powershell.exe, and
-    # the tray-icon test needs a real Electron on this platform.
-    runs-on: windows-latest
+    strategy:
+      # A red macOS leg must never hide a red Windows leg. Windows is the
+      # platform users actually have today, so its result is the one that counts
+      # even while the macOS port is incomplete.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -21,8 +26,24 @@ jobs:
 
       - run: npm ci
 
-      - name: Generate icons
-        run: npm run icons
+      # There is deliberately no icon-generation step. build/icon.{svg,ico,png}
+      # are committed, and `npm run icons` is a hand-run step for when the SVG
+      # changes. See the drift guard below.
+
+      # The app has exactly one runtime dependency and no native addons, which is
+      # what makes it portable with nothing to recompile. `active-win` is the
+      # obvious thing to reach for when implementing window enumeration, and it is
+      # a native addon — this turns a rule someone can rationalise past into a
+      # red check.
+      - name: No native dependencies
+        shell: bash
+        run: |
+          deps=$(node -e "console.log(Object.keys(require('./package.json').dependencies).sort().join(','))")
+          if [ "$deps" != "ws" ]; then
+            echo "Runtime dependencies changed to: $deps (expected exactly: ws)"
+            echo "Adding a runtime dependency — especially a native addon — needs a discussion first."
+            exit 1
+          fi
 
       - name: Typecheck
         run: npm run typecheck
@@ -36,7 +57,13 @@ jobs:
       - name: Interactions
         run: npm run test:interactions
 
-      # Needs a display to construct nativeImage; the Windows runner has one.
+      # Covers the 0.1.x -> 0.2.0 hook marker and backup migration. Safe for CI:
+      # it redirects HOME/USERPROFILE at a temp directory and asserts the redirect
+      # took before touching anything.
+      - name: Hook migration
+        run: npm run test:hook-migration
+
+      # Needs a real Electron and a display; both runners have one.
       - name: Tray icons
         run: npm run test:tray-icons
 
@@ -48,3 +75,25 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # Separate job, one runner: this compares against the base branch and has
+  # nothing to do with either platform.
+  icons-in-sync:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The icons are committed rather than generated, so the one failure mode is
+      # editing the SVG and forgetting to regenerate. This buys drift protection
+      # without putting a rasterizer back in the build.
+      - name: icon.svg changed without regenerating the rasters
+        shell: bash
+        run: |
+          changed=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- build/)
+          if grep -q 'build/icon.svg' <<< "$changed" && ! grep -q 'build/icon.ico' <<< "$changed"; then
+            echo "build/icon.svg changed but build/icon.ico did not — run 'npm run icons' and commit the result."
+            exit 1
+          fi

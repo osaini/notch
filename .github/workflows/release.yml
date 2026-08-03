@@ -5,12 +5,30 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-permissions:
-  contents: write
+# One release per tag, built by more than one runner. Serialise rather than
+# cancel: a half-cancelled release leaves a draft with one platform's artifacts.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: win
+            artifacts: |
+              release/*.exe
+              release/*.exe.blockmap
+          - os: macos-latest
+            name: mac
+            artifacts: |
+              release/*.dmg
+              release/*.zip
+              release/*.blockmap
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -21,14 +39,48 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run icons
+
+      # Bare `electron-builder`, so each runner targets its own platform. No icon
+      # generation step: build/icon.{ico,png} are committed.
       - run: npm run dist
 
-      # The installer is unsigned; SmartScreen will warn on first run.
-      - name: Attach installer to release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
+        with:
+          # upload-artifact@v4 no longer lets two jobs append to one artifact
+          # name, so each platform uploads its own and the release job merges.
+          name: dist-${{ matrix.name }}
+          path: ${{ matrix.artifacts }}
+          # Catches a silent target-config change that stops producing installers.
+          if-no-files-found: error
+
+  release:
+    needs: build
+    # Only downloads and uploads, so the cheapest runner will do.
+    runs-on: ubuntu-latest
+    # Least privilege: the write scope lives on the one job that needs it rather
+    # than on the whole workflow.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Both platforms ship unsigned — the Windows installer has no certificate
+      # and the macOS bundle is only ad-hoc signed — so checksums are the only
+      # integrity signal users get.
+      - name: Checksums
+        run: |
+          cd dist
+          shasum -a 256 * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # Exactly one release call. Two matrix jobs both calling this action on the
+      # same tag appears to work, because it upserts, but they race to create the
+      # release and the loser then rewrites the body and draft flag — so the
+      # result is nondeterministic.
+      - uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: |
-            release/*.exe
-            release/*.exe.blockmap
+          files: dist/**
