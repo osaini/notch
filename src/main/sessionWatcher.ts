@@ -696,7 +696,7 @@ export class SessionWatcher extends EventEmitter {
           ok: false,
           message:
             code === 'EPERM'
-              ? 'Windows refused to terminate this process (it may be elevated).'
+              ? 'The operating system refused to terminate this process (it may be elevated).'
               : `Could not terminate the process: ${(err as Error).message}`
         }
       }
