@@ -12,7 +12,13 @@ import {
   toDesignSessions
 } from '../src/main/sessionWatcher'
 import { DesignWatcher, DESIGN_WINDOW_TITLES } from '../src/main/designWatcher'
-import { HookServer, HOOK_EVENTS, hookUrl } from '../src/main/hookServer'
+import {
+  HookServer,
+  HOOK_EVENTS,
+  HOOK_MARKER,
+  LEGACY_HOOK_MARKERS,
+  hookUrl
+} from '../src/main/hookServer'
 import { SETTINGS_PATH, getHookStatus, installHooks, uninstallHooks } from '../src/main/hookInstaller'
 import {
   UsageScanner,
@@ -346,7 +352,7 @@ async function checkUsage(): Promise<void> {
     fail('malformed provider responses produced plan data')
   }
 
-  const cacheDir = path.join(os.tmpdir(), `windows-notch-verify-${Date.now()}`)
+  const cacheDir = path.join(os.tmpdir(), `notch-verify-${Date.now()}`)
   fs.mkdirSync(cacheDir, { recursive: true })
 
   const scanner = new UsageScanner(cacheDir)
@@ -482,9 +488,9 @@ async function checkHookInstall(): Promise<void> {
 
     const expected = before ? stripNotchHooks(JSON.parse(before) as Record<string, unknown>) : {}
     if (JSON.stringify(parsed) === JSON.stringify(expected)) {
-      pass('uninstall removed only Windows Notch hook entries')
+      pass('uninstall removed only Notch hook entries')
     } else {
-      fail('uninstall changed settings beyond Windows Notch hook entries')
+      fail('uninstall changed settings beyond Notch hook entries')
     }
   } catch (err) {
     fail(`threw: ${(err as Error).message}`)
@@ -516,7 +522,10 @@ function stripNotchHooks(settings: Record<string, unknown>): Record<string, unkn
         const commands = group.hooks.filter((command) => {
           if (!command || typeof command !== 'object') return true
           const url = (command as Record<string, unknown>).url
-          return typeof url !== 'string' || !url.includes('app=windows-notch')
+          if (typeof url !== 'string') return true
+          // Legacy markers count as ours, so uninstall must remove them too —
+          // otherwise a pre-rename install could never be cleaned up.
+          return ![HOOK_MARKER, ...LEGACY_HOOK_MARKERS].some((marker) => url.includes(marker))
         })
         if (commands.length === group.hooks.length) return group
         return commands.length ? { ...group, hooks: commands } : null

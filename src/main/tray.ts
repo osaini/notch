@@ -139,7 +139,7 @@ export class NotchTray {
 
   private render(): void {
     if (!this.tray) return
-    this.tray.setToolTip(`Windows Notch — ${this.summary}`)
+    this.tray.setToolTip(`Notch — ${this.summary}`)
     this.tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: this.summary, enabled: false },
@@ -151,7 +151,7 @@ export class NotchTray {
         { label: 'Rescan usage', click: this.actions.onRefreshUsage },
         { label: 'Reveal settings.json', click: this.actions.onOpenSettings },
         { type: 'separator' },
-        { label: 'Quit Windows Notch', click: this.actions.onQuit }
+        { label: 'Quit Notch', click: this.actions.onQuit }
       ])
     )
   }

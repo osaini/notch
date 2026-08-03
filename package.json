@@ -1,24 +1,25 @@
 {
-  "name": "windows-notch",
-  "version": "0.1.0",
-  "description": "Agent status indicator for Claude Code — a faux notch for Windows",
+  "name": "notch",
+  "version": "0.2.0",
+  "description": "Agent status indicator for Claude Code — a faux notch for your desktop",
   "main": "out/main/index.js",
   "author": "Oaj Saini",
   "license": "MIT",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/osaini/windows-notch.git"
+    "url": "git+https://github.com/osaini/notch.git"
   },
-  "homepage": "https://github.com/osaini/windows-notch#readme",
+  "homepage": "https://github.com/osaini/notch#readme",
   "bugs": {
-    "url": "https://github.com/osaini/windows-notch/issues"
+    "url": "https://github.com/osaini/notch/issues"
   },
   "keywords": [
     "claude-code",
     "codex",
     "electron",
     "windows",
+    "macos",
     "notch",
     "overlay",
     "status-indicator"
@@ -39,6 +40,7 @@
     "demo:status-flash": "esbuild scripts/demoStatusFlash.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/demo-status-flash.cjs --log-level=warning && node out/demo-status-flash.cjs",
     "test:pill-geometry": "esbuild scripts/testPillGeometry.ts --bundle --platform=node --format=cjs --target=node22 --alias:electron=./scripts/stubs/electron.ts --alias:@shared/types=./src/shared/types.ts --outfile=out/test-pill-geometry.cjs --log-level=warning && node out/test-pill-geometry.cjs",
     "test:interactions": "esbuild scripts/testInteractions.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/test-interactions.cjs --log-level=warning && node out/test-interactions.cjs",
+    "test:hook-migration": "esbuild scripts/testHookMigration.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/test-hook-migration.cjs --log-level=warning && node out/test-hook-migration.cjs",
     "smoke:managed-codex": "esbuild scripts/smokeManagedCodex.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/smoke-managed-codex.cjs --log-level=warning && node out/smoke-managed-codex.cjs",
     "hooks:install": "esbuild scripts/manageHooks.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/manage-hooks.cjs --log-level=warning && node out/manage-hooks.cjs install",
     "hooks:uninstall": "esbuild scripts/manageHooks.ts --bundle --platform=node --format=cjs --target=node22 --outfile=out/manage-hooks.cjs --log-level=warning && node out/manage-hooks.cjs uninstall",
@@ -74,8 +76,9 @@
     "vite": "^7.3.6"
   },
   "build": {
-    "appId": "dev.windowsnotch.app",
-    "productName": "Windows Notch",
+    "//appId": "Persisted identity: this string decides app.getPath('userData'). Changing it orphans settings.json, the usage cache and paired mobile devices, and makes NSIS treat the result as a different product that can install alongside the old one.",
+    "appId": "dev.notch.app",
+    "productName": "Notch",
     "afterPack": "scripts/stampExecutableIcon.cjs",
     "directories": {
       "output": "release"

@@ -37,7 +37,7 @@ No third-party npm dependencies: Node built-ins only.
 Vendor it into your repository (what this project does):
 
 ```bash
-git clone https://github.com/osaini/windows-notch.git /tmp/wn
+git clone https://github.com/osaini/notch.git /tmp/wn
 cp -r /tmp/wn/debug-orchestrator ./debug-orchestrator
 echo ".debug-runs/" >> .gitignore
 ```

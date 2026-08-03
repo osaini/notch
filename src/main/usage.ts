@@ -724,7 +724,7 @@ async function fetchCodexPlanUsage(
         params: {
           clientInfo: {
             name: 'windows_notch',
-            title: 'Windows Notch',
+            title: 'Notch',
             version: '0.1.0'
           }
         }

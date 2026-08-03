@@ -231,9 +231,10 @@ the row says **Hide**, and it only hides the row.
 The hook server binds to `127.0.0.1:47821`, walking forward if necessary. Hook installation is
 manual and reversible:
 
-- a pristine `settings.json.windows-notch-backup` is created once
-- installation merges only marked Windows Notch entries
-- uninstall removes only those marked entries
+- a pristine `settings.json.notch-backup` is created once (a pre-0.2 backup is renamed, never
+  replaced — by install time `settings.json` is no longer pristine)
+- installation merges only entries carrying the `app=notch` marker
+- uninstall removes only those marked entries, including the pre-0.2 `app=windows-notch` marker
 - writes use a temporary file and rename
 
 `PermissionRequest` is held so the panel can show the real tool name and input. The response schema
@@ -352,7 +353,7 @@ Exclusive-fullscreen apps may cover the overlay.
 [SECURITY.md](SECURITY.md) first: this is the largest attack surface in the app, and pairing a
 device grants it unattended code execution in your projects.
 
-Once enabled, Windows Notch hosts a mobile web app and authenticated API on port `47822`, bound to
+Once enabled, Notch hosts a mobile web app and authenticated API on port `47822`, bound to
 every network interface. Copy one of the phone companion URLs to a phone on the same private
 network and enter the displayed six-digit pairing code. Windows Firewall may ask you to allow the
 app on private networks. Turning the setting back off closes the port immediately, without a

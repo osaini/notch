@@ -291,6 +291,12 @@ export interface HookInstallStatus {
   events: string[]
   settingsPath: string
   backupPath: string | null
+  /**
+   * True when any installed entry still carries a pre-rename marker. Those
+   * entries are recognised as ours, so `installed` stays true — this flag is
+   * what tells the startup path to rewrite them anyway.
+   */
+  hasLegacyMarker?: boolean
   /** Set when settings.json exists but could not be parsed. */
   error?: string
 }

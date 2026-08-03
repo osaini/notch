@@ -8,8 +8,10 @@ import path from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import {
   HOOK_EVENTS,
+  HOOK_MARKER,
   HOOK_SPECS,
   HookServer,
+  LEGACY_HOOK_MARKERS,
   MAX_HOLD_MS,
   hookUrl,
   normalizeClaudeQuestions
@@ -159,15 +161,16 @@ async function testHookAuthorization(): Promise<void> {
   })
 
   const rejected: { name: string; url: string; headers?: Record<string, string> }[] = [
-    { name: 'no token', url: `http://127.0.0.1:${port}/hook?app=windows-notch` },
+    { name: 'no token', url: `http://127.0.0.1:${port}/hook?${HOOK_MARKER}` },
     {
       name: 'wrong token',
-      url: `http://127.0.0.1:${port}/hook?app=windows-notch&token=${'x'.repeat(token.length)}`
+      url: `http://127.0.0.1:${port}/hook?${HOOK_MARKER}&token=${'x'.repeat(token.length)}`
     },
     { name: 'no marker', url: `http://127.0.0.1:${port}/hook?token=${token}` },
+    { name: 'unknown marker', url: `http://127.0.0.1:${port}/hook?app=other&token=${token}` },
     {
       name: 'wrong path',
-      url: `http://127.0.0.1:${port}/other?app=windows-notch&token=${token}`
+      url: `http://127.0.0.1:${port}/other?${HOOK_MARKER}&token=${token}`
     },
     {
       name: 'browser origin',
@@ -198,6 +201,22 @@ async function testHookAuthorization(): Promise<void> {
       body: JSON.stringify({ hook_event_name: 'Stop', session_id: 'claude-test' })
     })
     assert.equal(accepted.status, 200)
+
+    // A pre-rename install keeps working until the startup path rewrites it.
+    // The listener is already up by then, and an unparseable settings.json means
+    // the rewrite never happens at all — rejecting the old marker would silently
+    // stop delivering events rather than degrading.
+    for (const legacy of LEGACY_HOOK_MARKERS) {
+      const legacyAccepted = await fetch(
+        `http://127.0.0.1:${port}/hook?${legacy}&token=${token}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ hook_event_name: 'Stop', session_id: 'claude-legacy' })
+        }
+      )
+      assert.equal(legacyAccepted.status, 200, `${legacy} should still be answered`)
+    }
   } finally {
     // A held interaction keeps its socket open; without this a failed
     // assertion hangs the run instead of reporting it.
@@ -675,7 +694,7 @@ async function testManagedCodexDispatchLaunch(): Promise<void> {
     ]
   )
 
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'windows-notch-managed-'))
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'notch-managed-'))
   const rolloutPath = path.join(tempDir, 'rollout.jsonl')
   const timeoutPath = path.join(tempDir, 'partial.jsonl')
   const threadId = 'thread-dispatch'

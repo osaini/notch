@@ -3,14 +3,29 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { HookInstallStatus } from '@shared/types'
-import { HOOK_EVENTS, HOOK_MARKER, HOOK_SPECS, HOOK_TOKEN_KEY, generateHookToken, hookUrl } from './hookServer'
+import {
+  HOOK_EVENTS,
+  HOOK_MARKER,
+  HOOK_SPECS,
+  HOOK_TOKEN_KEY,
+  LEGACY_HOOK_MARKERS,
+  generateHookToken,
+  hookUrl
+} from './hookServer'
 
 export const SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json')
 /**
  * Created once, on the first install, and never overwritten — it is the
- * pristine pre-Windows-Notch copy of the user's real config.
+ * pristine pre-Notch copy of the user's real config.
+ *
+ * A persisted path, not a brand string. Writing to a *new* name while an old
+ * backup exists would create a second "pristine" copy from an already-modified
+ * settings.json, destroying the only clean one — so the rename migrates the
+ * file rather than starting a new one. See `backupOnce`.
  */
-export const BACKUP_PATH = `${SETTINGS_PATH}.windows-notch-backup`
+export const BACKUP_PATH = `${SETTINGS_PATH}.notch-backup`
+/** Backup names written by earlier versions, newest first. */
+const LEGACY_BACKUP_PATHS = [`${SETTINGS_PATH}.windows-notch-backup`] as const
 
 interface HookCommand {
   type?: string
@@ -30,9 +45,23 @@ type Settings = Record<string, unknown> & {
 }
 
 function isOurs(cmd: unknown): boolean {
-  if (!cmd || typeof cmd !== 'object') return false
+  return markerOf(cmd) !== null
+}
+
+/**
+ * Which of our markers an entry carries, or null when it is not ours.
+ *
+ * Legacy markers count as ours so a pre-rename install can still be rewritten
+ * and cleanly uninstalled. `hasLegacyMarker` on the status is what turns that
+ * recognition into an actual migration — without it a tolerant `isOurs` would
+ * report the install as current and leave the old marker in place forever.
+ */
+function markerOf(cmd: unknown): string | null {
+  if (!cmd || typeof cmd !== 'object') return null
   const url = (cmd as HookCommand).url
-  return typeof url === 'string' && url.includes(HOOK_MARKER)
+  if (typeof url !== 'string') return null
+  if (url.includes(HOOK_MARKER)) return HOOK_MARKER
+  return LEGACY_HOOK_MARKERS.find((marker) => url.includes(marker)) ?? null
 }
 
 async function readSettings(): Promise<{ settings: Settings; existed: boolean; error?: string }> {
@@ -62,7 +91,8 @@ async function readSettings(): Promise<{ settings: Settings; existed: boolean; e
 /** Write via a temp file + rename so a crash cannot leave a half-written config. */
 async function writeSettings(settings: Settings): Promise<void> {
   await fsp.mkdir(path.dirname(SETTINGS_PATH), { recursive: true })
-  const tmp = `${SETTINGS_PATH}.windows-notch-tmp`
+  // Transient, unlike BACKUP_PATH — safe to rename with the product.
+  const tmp = `${SETTINGS_PATH}.notch-tmp`
   await fsp.writeFile(tmp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
   await fsp.rename(tmp, SETTINGS_PATH)
 }
@@ -70,12 +100,21 @@ async function writeSettings(settings: Settings): Promise<void> {
 async function backupOnce(): Promise<string | null> {
   if (!fs.existsSync(SETTINGS_PATH)) return null
   if (fs.existsSync(BACKUP_PATH)) return BACKUP_PATH
+  // Adopt a pre-rename backup instead of writing a new one. By this point
+  // settings.json already carries our hooks, so copying it now would replace a
+  // genuinely pristine copy with a modified one.
+  const legacy = LEGACY_BACKUP_PATHS.find((candidate) => fs.existsSync(candidate))
+  if (legacy) {
+    await fsp.rename(legacy, BACKUP_PATH)
+    return BACKUP_PATH
+  }
   await fsp.copyFile(SETTINGS_PATH, BACKUP_PATH)
   return BACKUP_PATH
 }
 
 function currentBackupPath(): string | null {
-  return fs.existsSync(BACKUP_PATH) ? BACKUP_PATH : null
+  if (fs.existsSync(BACKUP_PATH)) return BACKUP_PATH
+  return LEGACY_BACKUP_PATHS.find((candidate) => fs.existsSync(candidate)) ?? null
 }
 
 /** Which of our hook events are currently wired up, to which port, and with which token. */
@@ -83,12 +122,14 @@ function inspect(settings: Settings): {
   events: string[]
   port: number | null
   token: string | null
+  hasLegacyMarker: boolean
 } {
   const events: string[] = []
   let port: number | null = null
   let token: string | null = null
+  let hasLegacyMarker = false
   const hooks = settings.hooks
-  if (!hooks || typeof hooks !== 'object') return { events, port, token }
+  if (!hooks || typeof hooks !== 'object') return { events, port, token, hasLegacyMarker }
 
   for (const [event, groups] of Object.entries(hooks)) {
     if (!Array.isArray(groups)) continue
@@ -96,7 +137,9 @@ function inspect(settings: Settings): {
       const cmds = group?.hooks
       if (!Array.isArray(cmds)) continue
       for (const cmd of cmds) {
-        if (!isOurs(cmd)) continue
+        const marker = markerOf(cmd)
+        if (marker === null) continue
+        if (marker !== HOOK_MARKER) hasLegacyMarker = true
         if (!events.includes(event)) events.push(event)
         const url = String((cmd as HookCommand).url)
         const match = /:(\d+)\/hook/.exec(url)
@@ -109,7 +152,7 @@ function inspect(settings: Settings): {
       }
     }
   }
-  return { events, port, token }
+  return { events, port, token, hasLegacyMarker }
 }
 
 /**
@@ -125,13 +168,14 @@ export async function getInstalledHookToken(): Promise<string | null> {
 
 export async function getHookStatus(): Promise<HookInstallStatus> {
   const { settings, error } = await readSettings()
-  const { events, port } = inspect(settings)
+  const { events, port, hasLegacyMarker } = inspect(settings)
   return {
     installed: events.length > 0,
     port,
     events,
     settingsPath: SETTINGS_PATH,
     backupPath: currentBackupPath(),
+    hasLegacyMarker,
     error
   }
 }

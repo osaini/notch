@@ -33,9 +33,34 @@ export const QUESTION_TIMEOUT_MS = 120_000
 export const MAX_HOLD_MS = 570_000
 export const PERMISSION_TIMEOUT_MS = 30_000
 
-/** Query marker that identifies hook entries as ours, independent of port. */
-export const HOOK_MARKER = 'app=windows-notch'
-const [HOOK_MARKER_KEY, HOOK_MARKER_VALUE] = HOOK_MARKER.split('=')
+/**
+ * Query marker that identifies hook entries as ours, independent of port.
+ *
+ * This is a persisted wire identifier, not a brand string. It is written into
+ * the user's real `~/.claude/settings.json` inside every hook URL, and
+ * `hookInstaller.isOurs` matches on it to decide which entries we may rewrite
+ * or remove. Changing it without recognising the old value orphans every
+ * existing install's hooks — `uninstallHooks` would leave them behind forever
+ * and `installHooks` would add a second set, firing every event twice.
+ */
+export const HOOK_MARKER = 'app=notch'
+/**
+ * Markers written by earlier versions. Recognised on read so a pre-rename
+ * install can be migrated and cleanly uninstalled; never emitted.
+ */
+export const LEGACY_HOOK_MARKERS = ['app=windows-notch'] as const
+const [HOOK_MARKER_KEY] = HOOK_MARKER.split('=')
+/**
+ * Accepted values for the marker query parameter, newest first.
+ *
+ * The listener must answer legacy URLs too. `installHooks` migrates them at
+ * startup, but the server is already listening by then, and a settings.json we
+ * cannot parse means the migration never happens at all — rejecting the old
+ * value would silently stop delivering events instead of degrading.
+ */
+const ACCEPTED_MARKER_VALUES = new Set(
+  [HOOK_MARKER, ...LEGACY_HOOK_MARKERS].map((marker) => marker.split('=')[1])
+)
 /** The only path this listener answers on. */
 export const HOOK_PATH = '/hook'
 /** Query parameter carrying the shared secret. */
@@ -280,7 +305,8 @@ export class HookServer extends EventEmitter {
       return null
     }
     if (url.pathname !== HOOK_PATH) return null
-    if (url.searchParams.get(HOOK_MARKER_KEY) !== HOOK_MARKER_VALUE) return null
+    const marker = url.searchParams.get(HOOK_MARKER_KEY)
+    if (marker === null || !ACCEPTED_MARKER_VALUES.has(marker)) return null
     if (!tokenMatches(this.token, url.searchParams.get(HOOK_TOKEN_KEY))) return null
     // An unlabelled entry is blocking, which is what every pre-intent install
     // wrote and the safer reading of an unrecognised label.
@@ -503,7 +529,7 @@ export class HookServer extends EventEmitter {
       const message =
         interaction.toolName === 'ExitPlanMode'
           ? 'Not yet — keep planning. Continue refining the plan in plan mode.'
-          : 'Denied in Windows Notch'
+          : 'Denied in Notch'
       this.sendJson(response, {
         hookSpecificOutput: {
           hookEventName: 'PermissionRequest',

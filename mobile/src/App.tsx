@@ -426,7 +426,7 @@ function PairingScreen({
         <span className="eyebrow">Secure connection</span>
         <h1>Pair with {status.computerName}</h1>
         <p>
-          Open Settings in Windows Notch and enter the six-digit phone companion code.
+          Open Settings in Notch and enter the six-digit phone companion code.
         </p>
         <label className="field">
           <span>Pairing code</span>
@@ -499,7 +499,7 @@ export function App({ bridge }: AppProps): React.JSX.Element {
             ? 'This phone needs to be paired again.'
             : error instanceof Error
               ? error.message
-              : 'Windows Notch could not be reached.'
+              : 'Notch could not be reached.'
         setConnectionError(unavailable)
       }
     })()
@@ -533,7 +533,7 @@ export function App({ bridge }: AppProps): React.JSX.Element {
     return (
       <main className="connection-screen">
         <div className="brand-mark"><i /></div>
-        <h1>Can’t reach Windows Notch</h1>
+        <h1>Can’t reach Notch</h1>
         <p>{connectionError}</p>
         <button
           className="primary-button"

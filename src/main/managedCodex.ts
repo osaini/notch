@@ -476,9 +476,9 @@ ${codexArgs.map((arg) => `  (& $decode '${encode(arg)}')`).join('\n')}
       socket.on('error', (error) => this.emit('server-error', error))
       await this.request('initialize', {
         clientInfo: {
-          name: 'windows-notch',
-          title: 'Windows Notch',
-          version: '0.1.0'
+          name: 'notch',
+          title: 'Notch',
+          version: '0.2.0'
         },
         capabilities: { experimentalApi: true }
       })

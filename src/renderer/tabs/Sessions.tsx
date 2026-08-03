@@ -445,7 +445,7 @@ export function InteractionTakeover({
           {!interaction.answerable && (
             <p className="notice">
               {interaction.transport === 'codex-rollout'
-                ? 'This Codex task was launched outside Windows Notch. Answer it in the agent window.'
+                ? 'This Codex task was launched outside Notch. Answer it in the agent window.'
                 : 'The agent finished its turn with this question. Reply in its terminal.'}
             </p>
           )}

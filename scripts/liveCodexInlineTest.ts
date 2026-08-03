@@ -79,8 +79,8 @@ socket.once('open', async () => {
   try {
     await request('initialize', {
       clientInfo: {
-        name: 'windows-notch-live-test',
-        title: 'Windows Notch live inline test',
+        name: 'notch-live-test',
+        title: 'Notch live inline test',
         version: '0.1.0'
       },
       capabilities: { experimentalApi: true }
@@ -101,7 +101,7 @@ socket.once('open', async () => {
       threadId,
       input: [{
         type: 'text',
-        text: 'Before doing anything else, use request_user_input to ask exactly one question. Use id "live_test", header "Live test", and question "Did this Codex question appear inside the Windows Notch dropdown?" Provide options "Yes - it appeared" (description: "The notch expanded and showed this question") and "No - it did not" (description: "No inline question appeared"). After the answer arrives, respond with exactly "INLINE_TEST_RESULT: " followed by the selected answer, then stop.'
+        text: 'Before doing anything else, use request_user_input to ask exactly one question. Use id "live_test", header "Live test", and question "Did this Codex question appear inside the Notch dropdown?" Provide options "Yes - it appeared" (description: "The notch expanded and showed this question") and "No - it did not" (description: "No inline question appeared"). After the answer arrives, respond with exactly "INLINE_TEST_RESULT: " followed by the selected answer, then stop.'
       }],
       collaborationMode: {
         mode: 'plan',

@@ -1,12 +1,12 @@
 # Notch Mobile
 
-Phone companion for Windows Notch. It connects to the authenticated bridge hosted by the Electron
-app. The manifest is PWA-ready; service-worker installation and offline shell caching require an
-HTTPS origin when opened from a phone.
+Phone companion for Notch. It connects to the authenticated bridge hosted by the Electron app. The
+manifest is PWA-ready; service-worker installation and offline shell caching require an HTTPS origin
+when opened from a phone.
 
-Start Windows Notch:
+Start Notch:
 
-```powershell
+```sh
 npm start
 ```
 

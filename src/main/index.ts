@@ -436,7 +436,10 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
-  app.setAppUserModelId('dev.windowsnotch.app')
+  // Must stay byte-identical to `build.appId` in package.json, or Windows
+  // treats the running app and the installed shortcut as different identities
+  // and taskbar pinning silently stops working.
+  app.setAppUserModelId('dev.notch.app')
 
   // A status overlay has no business with the camera, the microphone, location,
   // or notifications. Electron grants several of these by default, so say no
@@ -556,7 +559,11 @@ app.whenReady().then(async () => {
       hookStatus.installed &&
       (hookStatus.port !== port ||
         !HOOK_EVENTS.every((event) => hookStatus!.events.includes(event)) ||
-        installedToken !== hookServer.authToken)
+        installedToken !== hookServer.authToken ||
+        // A pre-rename marker is still recognised as ours, so `installed` is
+        // true and nothing above would fire. Without this clause the old marker
+        // would stay in the user's settings.json indefinitely.
+        hookStatus.hasLegacyMarker)
     ) {
       hookStatus = await installHooks(port, hookServer.authToken)
     }

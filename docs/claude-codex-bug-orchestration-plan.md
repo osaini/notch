@@ -10,7 +10,7 @@ This plan is written so either Claude Code or Codex can implement it without rel
 
 ## Current environment
 
-- Repository: `windows-notch`
+- Repository: `notch`
 - Platform: Windows / PowerShell
 - Runtime: Node.js 22
 - Codex CLI: `0.146.0`

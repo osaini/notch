@@ -224,9 +224,11 @@ export function Settings({
         )}
       </section>
 
+      {/* TODO(platform): the relaunch gesture is OS-specific — this becomes
+          PlatformInfo.relaunchHint once the platform layer lands. */}
       <p className="footnote">
-        After choosing Quit, reopen Windows Notch from the Start menu if installed, or double-click
-        the packaged Windows Notch.exe.
+        After choosing Quit, reopen Notch from the Start menu if installed, or double-click the
+        packaged Notch.exe.
       </p>
     </div>
   )

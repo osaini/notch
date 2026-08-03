@@ -7,12 +7,26 @@
  * (unsigned product builds can be blocked by Application Control policy), it is
  * a GUI-subsystem exe so no console window appears, and it always picks up
  * whatever `npm run build` last produced — no reinstall after a code change.
+ *
+ * Windows-only, and deliberately not ported: this is a development convenience,
+ * not a shipped feature. On other platforms `npm run dev` is the equivalent.
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 
 const SHORTCUT_NAME = 'Notch'
+/** Repo names this script has shipped under, so a stale checkout still works. */
+const EXPECTED_PACKAGE_NAMES = ['notch', 'windows-notch']
+
+function requireWindows(): void {
+  if (process.platform !== 'win32') {
+    throw new Error(
+      `The Start menu launcher is Windows-only (this is ${process.platform}). ` +
+        'Use `npm run dev` instead.'
+    )
+  }
+}
 
 export interface LauncherStatus {
   shortcutPath: string
@@ -29,8 +43,10 @@ function repoRoot(): string {
     throw new Error(`No package.json at ${root} — run this from the repository root.`)
   }
   const name = JSON.parse(readFileSync(manifest, 'utf8')).name
-  if (name !== 'windows-notch') {
-    throw new Error(`Expected the windows-notch repo at ${root}, found "${name}".`)
+  if (!EXPECTED_PACKAGE_NAMES.includes(name)) {
+    throw new Error(
+      `Expected the notch repo at ${root}, found "${name}".`
+    )
   }
   return root
 }
@@ -88,7 +104,7 @@ export function installLauncher(): LauncherStatus {
     `$s.TargetPath = ${psLiteral(electron)}`,
     `$s.Arguments = ${psLiteral(`"${root}"`)}`,
     `$s.WorkingDirectory = ${psLiteral(root)}`,
-    `$s.Description = 'Windows Notch overlay'`,
+    `$s.Description = 'Notch overlay'`,
     '$s.Save()'
   ].join('; ')
 
@@ -109,6 +125,10 @@ export function uninstallLauncher(): LauncherStatus {
 function main(): void {
   const action = process.argv[2] ?? 'status'
   try {
+    // Guard here rather than in each export: the failure otherwise surfaces as
+    // "APPDATA is not set", which reads like a broken environment instead of a
+    // Windows-only script run on the wrong OS.
+    requireWindows()
     const result =
       action === 'install'
         ? installLauncher()

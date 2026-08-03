@@ -13,7 +13,7 @@ async function resolveHookEndpoint(): Promise<string> {
   const [status, token] = await Promise.all([getHookStatus(), getInstalledHookToken()])
   if (!token) {
     throw new Error(
-      'No Windows Notch hook token found in settings.json. Run `npm run hooks:install` first.'
+      'No Notch hook token found in settings.json. Run `npm run hooks:install` first.'
     )
   }
   return hookUrl(status.port ?? DEFAULT_PORT, token)
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   )
   if (!sleeper.pid) throw new Error('Could not start the disposable demo process')
 
-  const sessionId = `windows-notch-status-flash-demo-${sleeper.pid}`
+  const sessionId = `notch-status-flash-demo-${sleeper.pid}`
   const sessionsDir = path.join(os.homedir(), '.claude', 'sessions')
   const sessionFile = path.join(sessionsDir, `${sleeper.pid}.json`)
   const startedAt = Date.now()

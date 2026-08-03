@@ -591,7 +591,7 @@ export class MobileBridge extends EventEmitter {
       ? this.devices.find((candidate) => candidate.tokenHash === tokenHash)
       : undefined
     if (!device) {
-      if (required) throw new HttpError(401, 'Pair this phone with Windows Notch first.')
+      if (required) throw new HttpError(401, 'Pair this phone with Notch first.')
       return null
     }
     device.lastSeenAt = now

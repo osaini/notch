@@ -3,14 +3,14 @@
 ## Reporting a vulnerability
 
 Please report security issues privately through
-[GitHub Security Advisories](https://github.com/osaini/windows-notch/security/advisories/new)
+[GitHub Security Advisories](https://github.com/osaini/notch/security/advisories/new)
 rather than opening a public issue. Expect an initial response within a week.
 
 ## Threat model
 
-Read this before installing. Windows Notch is a control surface for coding
-agents, and several of its features exist specifically to *reduce* friction
-around approval prompts. That is useful and it is also the risk.
+Read this before installing. Notch is a control surface for coding agents, and
+several of its features exist specifically to *reduce* friction around approval
+prompts. That is useful and it is also the risk.
 
 ### What the app can do on your machine
 
