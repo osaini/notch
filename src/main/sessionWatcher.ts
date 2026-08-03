@@ -1,5 +1,4 @@
 import { EventEmitter } from 'node:events'
-import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -15,6 +14,7 @@ import type {
   StructuredQuestion
 } from '@shared/types'
 import { DesignWatcher, type DesignWindow } from './designWatcher'
+import { platform } from './platform'
 
 export const SESSIONS_DIR = path.join(os.homedir(), '.claude', 'sessions')
 export const CODEX_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions')
@@ -47,6 +47,7 @@ interface CodexCacheEntry {
   parsed: ParsedCodexRollout
 }
 
+/** Structurally identical to `AgentProcess`; kept as the name this module uses. */
 export interface CodexTuiProcess {
   pid: number
   startedAt: number
@@ -84,64 +85,16 @@ function cleanTitle(value: unknown): string {
   return compact.length > 120 ? `${compact.slice(0, 117)}…` : compact
 }
 
-function encodedPowerShell(script: string): string {
-  return Buffer.from(script, 'utf16le').toString('base64')
-}
-
 /**
- * Codex rollout files do not contain a PID. On Windows the process list is the
+ * Codex rollout files do not contain a PID. The process list is the
  * authoritative signal that a TUI still exists; a rollout can end forever on
  * `task_started` when the user closes the tab or runs `/exit`.
+ *
+ * `null` means "could not tell" and is NOT the same as `[]` — see the pruning
+ * decision in `scan`, which treats any non-null result as authoritative.
  */
-async function listCodexTuiProcesses(): Promise<CodexTuiProcess[] | null> {
-  const script = `
-$ErrorActionPreference = 'Stop'
-@(Get-CimInstance Win32_Process -Filter "Name = 'codex.exe'") |
-  Where-Object { $_.CommandLine -notmatch '(?i)(?:^|\\s)app-server(?:\\s|$)' } |
-  ForEach-Object {
-    [pscustomobject]@{
-      pid = [int]$_.ProcessId
-      startedAt = ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds()
-      commandLine = [string]$_.CommandLine
-    }
-  } |
-  ConvertTo-Json -Compress
-`
-  return new Promise((resolve) => {
-    const child = spawn(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodedPowerShell(script)],
-      { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }
-    )
-    const stdout: Buffer[] = []
-    const timer = setTimeout(() => child.kill(), 2500)
-    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
-    child.once('error', () => {
-      clearTimeout(timer)
-      resolve(null)
-    })
-    child.once('close', (code) => {
-      clearTimeout(timer)
-      if (code !== 0) {
-        resolve(null)
-        return
-      }
-      try {
-        const parsed = JSON.parse(Buffer.concat(stdout).toString('utf8') || '[]') as unknown
-        const rows = Array.isArray(parsed) ? parsed : parsed ? [parsed] : []
-        resolve(rows.flatMap((value) => {
-          const row = recordObject(value)
-          const pid = num(row?.pid, -1)
-          const startedAt = num(row?.startedAt)
-          return pid > 0 && startedAt > 0
-            ? [{ pid, startedAt, commandLine: str(row?.commandLine) }]
-            : []
-        }))
-      } catch {
-        resolve(null)
-      }
-    })
-  })
+function listCodexTuiProcesses(): Promise<CodexTuiProcess[] | null> {
+  return platform.processes.listCodexTuiProcesses()
 }
 
 /**

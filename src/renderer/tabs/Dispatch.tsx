@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
-import type {
-  AgentVersions,
-  ComboWorkflow,
-  DispatchResult,
-  DispatchTarget,
-  PermissionMode,
-  UsageSnapshot
+import {
+  LAUNCHER_LABELS,
+  type AgentVersions,
+  type ComboWorkflow,
+  type DispatchResult,
+  type DispatchTarget,
+  type PermissionMode,
+  type UsageSnapshot
 } from '@shared/types'
 import { Listbox } from '../components/Listbox'
 import { durationUntil } from '../format'
+import { usePlatform } from '../platform'
 
 interface Props {
   attachments: string[]
@@ -70,6 +72,7 @@ function versionLabel(target: DispatchTarget, versions: AgentVersions | null): s
 }
 
 export function Dispatch({ attachments, usage, onClearAttachments }: Props): React.JSX.Element {
+  const platformInfo = usePlatform()
   const [projects, setProjects] = useState<string[]>([])
   const [agent, setAgent] = useState<DispatchTarget>('claude')
   const [cwd, setCwd] = useState('')
@@ -319,7 +322,7 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
           <div>
             <i />
             {result.ok
-              ? `${result.transport === 'managed-codex' ? 'Managed Codex' : 'Launched'} via ${result.launcher === 'wt' ? 'Windows Terminal' : 'PowerShell'}`
+              ? `${result.transport === 'managed-codex' ? 'Managed Codex' : 'Launched'} via ${LAUNCHER_LABELS[result.launcher]}`
               : `Failed: ${result.error}`}
           </div>
           <code className="cmd">{result.command}</code>
@@ -328,8 +331,11 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
 
       <p className="footnote">
         Opens a new terminal in the chosen directory. Codex uses a managed loopback App Server when
-        available so questions can be answered here; Windows Terminal has a safely encoded
-        PowerShell fallback.
+        available so questions can be answered here
+        {platformInfo ? `; ${platformInfo.terminalLabel} has a safely encoded fallback` : ''}.
+        {platformInfo && !platformInfo.features.splitPane
+          ? ' The pair opens as two windows on this platform rather than two panes.'
+          : ''}
       </p>
     </div>
   )

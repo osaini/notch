@@ -26,6 +26,8 @@ import {
   type NotchPosition,
   type ScreenEdge
 } from '@shared/types'
+import { platform } from './platform'
+import type { OverlayIntegration } from './platform/types'
 
 /**
  * The overlay window is a fixed-size transparent sheet pinned to an edge of a
@@ -171,6 +173,15 @@ export class NotchWindow {
     mobileBridge: false
   }
 
+  /**
+   * `overlay` is injected so `testPillGeometry.ts` can pin the geometry against a
+   * known rect rather than whatever the host OS reports — which is what lets the
+   * pill numbers stay covered on a macOS CI leg. The default is the real
+   * platform, and on Windows it returns `display.bounds`, exactly as the geometry
+   * read it before the extraction.
+   */
+  constructor(private readonly overlay: OverlayIntegration = platform.overlay) {}
+
   create(): BrowserWindow {
     const win = new BrowserWindow({
       width: OVERLAY_WIDTH,
@@ -187,8 +198,9 @@ export class NotchWindow {
       skipTaskbar: true,
       focusable: true,
       show: false,
-      // A tool window stays out of Alt-Tab, which is what an overlay wants.
-      type: 'toolbar',
+      // Window `type` is platform-specific: 'toolbar' on Windows keeps the
+      // overlay out of Alt-Tab, and macOS has no such type at all.
+      ...this.overlay.windowOptions(),
       webPreferences: {
         preload: join(__dirname, '../preload/index.js'),
         // The preload only touches `electron` itself, so it has nothing to lose
@@ -204,6 +216,7 @@ export class NotchWindow {
     // focused; it keeps the notch above the taskbar and above maximised apps.
     win.setAlwaysOnTop(true, 'screen-saver')
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    this.overlay.afterCreate(win)
     this.setInteractive(false)
     this.startCursorWatch()
     this.reposition(false)
@@ -554,11 +567,25 @@ export class NotchWindow {
    * drag spent most of its travel pinned against the clamp. Dragging, presets
    * and the resting position all share this, which keeps release from jumping.
    */
+  /**
+   * The rect the pill is allowed to occupy on `display`.
+   *
+   * Every geometry method below goes through this rather than reading
+   * `display.bounds` directly, because "the whole display" is a Windows answer:
+   * the notch is meant to sit over the taskbar there. On macOS the same rect
+   * would put a top-centre pill under the menu bar, and on a notched MacBook
+   * behind the camera housing. Note this is deliberately NOT what `getDisplays`
+   * reports — that describes the physical monitor to the user in Settings.
+   */
+  private pillArea(display: Electron.Display): Electron.Rectangle {
+    return this.overlay.pillArea(display)
+  }
+
   private alongRange(
     edge: ScreenEdge,
     display: Electron.Display
   ): { lo: number; hi: number; travel: number } {
-    const { bounds } = display
+    const bounds = this.pillArea(display)
     const horizontal = this.axisOf(edge) === 'horizontal'
     const span = horizontal ? bounds.width : bounds.height
     const start = horizontal ? bounds.x : bounds.y
@@ -581,7 +608,7 @@ export class NotchWindow {
     display: Electron.Display
   ): Point {
     const anchor = this.pillAnchor(edge)
-    const { bounds } = display
+    const bounds = this.pillArea(display)
     let x = pillCentre.x - anchor.x
     let y = pillCentre.y - anchor.y
     if (this.axisOf(edge) === 'horizontal') {
@@ -605,7 +632,7 @@ export class NotchWindow {
   /** The screen point the pill's centre rests at for a persisted position. */
   private pillCentreFor(position: NotchPosition): Point {
     const display = this.displayFor(position)
-    const { bounds } = display
+    const bounds = this.pillArea(display)
     const { lo, travel } = this.alongRange(position.edge, display)
     const along = lo + travel * clamp(position.offset, 0, 1)
     const rest = PILL_THICKNESS / 2
@@ -648,7 +675,7 @@ export class NotchWindow {
     display: Electron.Display,
     sticky?: ScreenEdge
   ): { edge: ScreenEdge; distance: number } {
-    const { bounds } = display
+    const bounds = this.pillArea(display)
     const rest = PILL_THICKNESS
     const candidates = [
       { edge: 'top' as ScreenEdge, distance: point.y - bounds.y - rest },
@@ -672,7 +699,7 @@ export class NotchWindow {
     display: Electron.Display,
     detach: number
   ): Point {
-    const { bounds } = display
+    const bounds = this.pillArea(display)
     const horizontal = this.axisOf(edge) === 'horizontal'
     const { lo, hi, travel } = this.alongRange(edge, display)
     let along = clamp(horizontal ? anchor.x : anchor.y, lo, hi)
@@ -697,7 +724,7 @@ export class NotchWindow {
 
   /** Pill centre while detached: under the cursor, but never off the display. */
   private freePillCentre(anchor: Point, edge: ScreenEdge, display: Electron.Display): Point {
-    const { bounds } = display
+    const bounds = this.pillArea(display)
     const { lo, hi } = this.alongRange(edge, display)
     const half = PILL_THICKNESS / 2
     if (this.axisOf(edge) === 'horizontal') {

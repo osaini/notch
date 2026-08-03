@@ -1,12 +1,14 @@
-import { EventEmitter } from 'node:events'
+﻿import { EventEmitter } from 'node:events'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { platform } from './platform'
+import type { DesignWindow, DesignWindowProbe } from './platform/types'
 
 /**
  * Claude Design has no local session file. It is opened from the Claude Desktop
  * sidebar as its own Electron `BrowserWindow`, and Desktop pins that window's
  * caption: the design window installs `page-title-updated -> preventDefault()`,
  * so the caption stays the creation-time title for the window's whole life.
- * That makes an exact caption match on a Claude Desktop window a stable signal —
+ * That makes an exact caption match on a Claude Desktop window a stable signal â€”
  * unlike the main Claude window, whose caption follows the page.
  *
  * Every locale shipped with Claude Desktop 1.24012.9 uses the same string, so a
@@ -21,12 +23,7 @@ const SWEEP_MS = 3000
 /** Restart backoff after the helper exits, capped so a broken host stays quiet. */
 const RESTART_DELAY_MS = [2000, 5000, 15000, 60000]
 
-export interface DesignWindow {
-  /** Decimal HWND. A string because a 64-bit handle does not fit a JS number. */
-  handle: string
-  pid: number
-  title: string
-}
+export type { DesignWindow }
 
 interface RawWindow {
   handle?: unknown
@@ -34,82 +31,6 @@ interface RawWindow {
   title?: unknown
 }
 
-function encodedPowerShell(script: string): string {
-  return Buffer.from(script, 'utf16le').toString('base64')
-}
-
-/**
- * One long-lived PowerShell process sweeps on a timer and prints one JSON line
- * per sweep. Re-spawning `powershell.exe` every few seconds would cost more
- * than everything else the notch does combined.
- */
-function buildScript(titles: readonly string[]): string {
-  const titleLiterals = titles.map((title) => `'${title.replace(/'/g, "''")}'`).join(',')
-  return `
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-
-Add-Type @"
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-public static class NotchDesignWindows {
-  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int count);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, StringBuilder text, int count);
-  [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
-}
-"@
-
-$designTitles = @(${titleLiterals})
-
-# Past setup, a transient error must not take the sweep loop down with it.
-$ErrorActionPreference = 'Continue'
-
-while ($true) {
-  $desktopPids = @{}
-  foreach ($proc in @(Get-Process -Name claude -ErrorAction SilentlyContinue)) {
-    $desktopPids[$proc.Id] = $true
-  }
-
-  $found = New-Object System.Collections.ArrayList
-  if ($desktopPids.Count -gt 0) {
-    $callback = [NotchDesignWindows+EnumProc] {
-      param($hWnd, $lParam)
-      if (-not [NotchDesignWindows]::IsWindowVisible($hWnd)) { return $true }
-      $owner = 0
-      [void][NotchDesignWindows]::GetWindowThreadProcessId($hWnd, [ref]$owner)
-      if (-not $desktopPids.ContainsKey($owner)) { return $true }
-      $class = New-Object System.Text.StringBuilder 128
-      [void][NotchDesignWindows]::GetClassNameW($hWnd, $class, $class.Capacity)
-      # Every Electron top-level window uses this class; it excludes the
-      # hidden IME/DDE helper windows the same process also owns.
-      if ($class.ToString() -ne 'Chrome_WidgetWin_1') { return $true }
-      $caption = New-Object System.Text.StringBuilder 512
-      [void][NotchDesignWindows]::GetWindowTextW($hWnd, $caption, $caption.Capacity)
-      $title = $caption.ToString()
-      if ($designTitles -notcontains $title) { return $true }
-      [void]$found.Add([pscustomobject]@{
-        handle = [string]$hWnd.ToInt64()
-        pid = $owner
-        title = $title
-      })
-      return $true
-    }
-    [void][NotchDesignWindows]::EnumWindows($callback, [IntPtr]::Zero)
-  }
-
-  # ConvertTo-Json collapses a one-element array in Windows PowerShell 5.1;
-  # the reader normalises both shapes. Written straight to the console handle so
-  # each sweep reaches the parent immediately rather than sitting in a buffer.
-  [Console]::Out.WriteLine((@{ windows = @($found) } | ConvertTo-Json -Depth 3 -Compress))
-  [Console]::Out.Flush()
-  Start-Sleep -Milliseconds ${SWEEP_MS}
-}
-`
-}
 
 function parseWindows(line: string): DesignWindow[] {
   let parsed: { windows?: unknown }
@@ -135,7 +56,7 @@ function parseWindows(line: string): DesignWindow[] {
 /**
  * Emits `update` whenever the set of open Claude Design windows changes.
  * Detection is presence-only: Design runs against claude.ai and writes nothing
- * local, so there is no busy/idle signal to read — see README.
+ * local, so there is no busy/idle signal to read â€” see README.
  */
 export class DesignWatcher extends EventEmitter {
   private child: ChildProcess | null = null
@@ -147,8 +68,23 @@ export class DesignWatcher extends EventEmitter {
   private lastSerialized = '[]'
   private failure: string | undefined
 
+  constructor(private readonly probe: DesignWindowProbe = platform.designWindows) {
+    super()
+  }
+
   start(): void {
     if (!this.stopped) return
+    // Check the capability before spawning anything: on a platform that cannot
+    // read another app's window titles there is nothing to run.
+    //
+    // A reason means "this platform could do this and something is wrong", and
+    // is rendered as a red error notice. An EMPTY reason means the feature does
+    // not exist here, and the UI must stay silent rather than showing a
+    // permanent error on every launch. See darwin/designWindows.ts.
+    if (!this.probe.supported) {
+      this.failure = this.probe.unsupportedReason || undefined
+      return
+    }
     this.stopped = false
     this.spawnHelper()
   }
@@ -174,16 +110,8 @@ export class DesignWatcher extends EventEmitter {
     if (this.stopped) return
     let child: ChildProcess
     try {
-      child = spawn(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-EncodedCommand',
-          encodedPowerShell(buildScript(DESIGN_WINDOW_TITLES))
-        ],
-        { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
-      )
+      const { exe, args } = this.probe.sweepCommand(DESIGN_WINDOW_TITLES, SWEEP_MS)
+      child = spawn(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (err) {
       this.scheduleRestart((err as Error).message)
       return
@@ -228,7 +156,7 @@ export class DesignWatcher extends EventEmitter {
     const delay = RESTART_DELAY_MS[Math.min(this.restarts, RESTART_DELAY_MS.length - 1)]
     this.restarts++
     if (this.restarts > RESTART_DELAY_MS.length) {
-      this.failure = `Claude Design detection is unavailable — ${reason}.`
+      this.failure = `Claude Design detection is unavailable â€” ${reason}.`
     }
     // Windows may be closing down with the app; drop what we last reported so a
     // dead helper never leaves a phantom design row on screen.

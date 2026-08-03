@@ -12,6 +12,7 @@ import type {
   NotchApi,
   NotchDragState,
   PendingInteraction,
+  PlatformInfo,
   SessionActionResult,
   SessionsSnapshot,
   UsageSnapshot
@@ -80,6 +81,7 @@ const api: NotchApi = {
   updateSettings: (patch) =>
     ipcRenderer.invoke('notch:updateSettings', patch) as Promise<AppSettings>,
   getDisplays: () => ipcRenderer.invoke('notch:getDisplays') as Promise<DisplayOption[]>,
+  getPlatformInfo: () => ipcRenderer.invoke('notch:getPlatformInfo') as Promise<PlatformInfo>,
   getMobileBridgeStatus: () =>
     ipcRenderer.invoke('notch:getMobileBridgeStatus') as Promise<MobileBridgeStatus>,
   regenerateMobilePairing: () =>

@@ -1,97 +1,16 @@
-import { Menu, Tray, nativeImage } from 'electron'
+import { Menu, Tray } from 'electron'
 import type { NotchColor } from '@shared/types'
+import { platform } from './platform'
 
-const COLORS: Record<NotchColor, string> = {
-  green: '#6FB585',
-  yellow: '#D9A93F',
-  red: '#E2705A',
-  blue: '#7FA8D6',
-  grey: '#736D60'
-}
-
-const TRAY_BACKGROUND = '#171513'
-const TRAY_FOREGROUND = '#F4EFE7'
-
-type Rgb = readonly [number, number, number]
-
-function rgb(hex: string): Rgb {
-  return [
-    Number.parseInt(hex.slice(1, 3), 16),
-    Number.parseInt(hex.slice(3, 5), 16),
-    Number.parseInt(hex.slice(5, 7), 16)
-  ]
-}
-
-function roundedRect(
-  x: number,
-  y: number,
-  left: number,
-  top: number,
-  right: number,
-  bottom: number,
-  radius: number
-): boolean {
-  const nearestX = Math.max(left + radius, Math.min(x, right - radius))
-  const nearestY = Math.max(top + radius, Math.min(y, bottom - radius))
-  return Math.hypot(x - nearestX, y - nearestY) <= radius
-}
-
-/** Builds the dynamic-island mark with a live status badge at 2x tray resolution. */
+/**
+ * The tray mark for a status colour.
+ *
+ * The pixel math is shared in `trayRender.ts`; the size, palette and
+ * template-image decision are per-platform, because the Windows tray sits on
+ * dark chrome while the macOS menu bar composites onto the wallpaper.
+ */
 export function trayImage(color: NotchColor): Electron.NativeImage {
-  const logicalSize = 16
-  const scale = 2
-  const size = logicalSize * scale
-  const samples = 4
-  const background = rgb(TRAY_BACKGROUND)
-  const foreground = rgb(TRAY_FOREGROUND)
-  const status = rgb(COLORS[color])
-
-  // Premultiplied BGRA in top-down rows, the raw bitmap layout Electron expects.
-  const pixels = Buffer.alloc(size * size * 4)
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      let alpha = 0
-      let red = 0
-      let green = 0
-      let blue = 0
-      for (let sy = 0; sy < samples; sy++) {
-        for (let sx = 0; sx < samples; sx++) {
-          const px = (x + (sx + 0.5) / samples) / scale
-          const py = (y + (sy + 0.5) / samples) / scale
-          let sample: Rgb | null = roundedRect(px, py, 0.8, 0.8, 15.2, 15.2, 3.1)
-            ? background
-            : null
-          if (roundedRect(px, py, 2.1, 5.05, 13.9, 10.95, 2.95)) sample = foreground
-          const distance = Math.hypot(px - 10.85, py - 8)
-          if (distance <= 1.55) sample = background
-          if (distance <= 1.05) sample = status
-          if (sample) {
-            alpha += 1
-            red += sample[0]
-            green += sample[1]
-            blue += sample[2]
-          }
-        }
-      }
-
-      const sampleCount = samples * samples
-      const coverage = alpha / sampleCount
-      const i = (y * size + x) * 4
-      if (alpha > 0) {
-        // BMP pixels are premultiplied BGRA, matching Electron's native image layout.
-        pixels[i] = Math.round((blue / alpha) * coverage)
-        pixels[i + 1] = Math.round((green / alpha) * coverage)
-        pixels[i + 2] = Math.round((red / alpha) * coverage)
-        pixels[i + 3] = Math.round(255 * coverage)
-      }
-    }
-  }
-
-  return nativeImage.createFromBitmap(pixels, {
-    width: size,
-    height: size,
-    scaleFactor: scale
-  })
+  return platform.tray.image(color)
 }
 
 export interface TrayActions {
@@ -114,7 +33,7 @@ export class NotchTray {
   constructor(private actions: TrayActions) {}
 
   create(): void {
-    this.tray = new Tray(trayImage(this.color))
+    this.tray = new Tray(this.image(this.color))
     this.render()
   }
 
@@ -122,8 +41,19 @@ export class NotchTray {
     if (this.color === color && this.summary === summary) return
     this.color = color
     this.summary = summary
-    this.tray?.setImage(trayImage(color))
+    this.tray?.setImage(this.image(color))
     this.render()
+  }
+
+  /**
+   * A template image is reduced to its alpha channel so macOS can recolour it,
+   * which would discard the status colour. Whether that trade is worth making is
+   * the platform's call, not this class's.
+   */
+  private image(color: NotchColor): Electron.NativeImage {
+    const image = trayImage(color)
+    if (platform.tray.template) image.setTemplateImage(true)
+    return image
   }
 
   setHooksInstalled(installed: boolean): void {
@@ -139,7 +69,11 @@ export class NotchTray {
 
   private render(): void {
     if (!this.tray) return
-    this.tray.setToolTip(`Notch — ${this.summary}`)
+    // macOS does not show tray tooltips at all. The summary is already the first
+    // (disabled) menu item, so there is nothing to replace it with.
+    if (platform.tray.supportsTooltip) {
+      this.tray.setToolTip(`Notch — ${this.summary}`)
+    }
     this.tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: this.summary, enabled: false },

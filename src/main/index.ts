@@ -13,6 +13,7 @@ import type {
   NotchDragInput,
   PendingInteraction,
   PermissionMode,
+  PlatformInfo,
   SessionActionResult,
   SessionsSnapshot,
   UsageSnapshot
@@ -36,6 +37,7 @@ import { focusSessionWindow } from './focus'
 import { MobileBridge } from './mobileBridge'
 import { ManagedCodexService } from './managedCodex'
 import { readTrailingQuestion } from './transcriptTail'
+import { assertSupportedPlatform, platform } from './platform'
 
 const NEEDS_INPUT_TTL_MS = 10 * 60 * 1000
 const NEEDS_INPUT_SWEEP_MS = 30_000
@@ -212,7 +214,7 @@ function pushUsage(snapshot: UsageSnapshot): void {
 
 function applyLoginSetting(settings: AppSettings): void {
   if (!app.isPackaged) return
-  app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin, path: process.execPath })
+  platform.autostart.apply(settings.launchAtLogin)
 }
 
 function applyThemeSetting(settings: AppSettings): void {
@@ -384,6 +386,13 @@ function registerIpc(): void {
     await mobileBridgeWork
     return next
   })
+  // Static for the process lifetime, so the renderer fetches it once on mount.
+  // Everything here exists so no tab hardcodes Windows-only copy or offers an
+  // affordance this platform cannot honour.
+  ipcMain.handle(
+    'notch:getPlatformInfo',
+    (): PlatformInfo => ({ ...platform.info, productName: app.getName() })
+  )
   ipcMain.handle('notch:getDisplays', () => notch.getDisplays())
   ipcMain.handle('notch:getDragState', () => notch.getDragState())
   ipcMain.handle('notch:getMobileBridgeStatus', () => mobileBridge?.getStatus() ?? {
@@ -423,10 +432,10 @@ function registerIpc(): void {
 
   ipcMain.on('notch:revealPath', (_event, target: unknown) => {
     if (typeof target !== 'string' || !target) return
-    // A UNC path would make Explorer reach out to an SMB host and hand over the
-    // user's credentials on the way. Only local absolute paths get revealed.
-    if (target.startsWith('\\\\') || target.startsWith('//')) return
-    if (!path.isAbsolute(target)) return
+    // On Windows a UNC path would make Explorer reach out to an SMB host and hand
+    // over the user's credentials on the way, so only local absolute paths are
+    // revealed. What counts as safe is the platform's call.
+    if (!platform.paths.isRevealable(target)) return
     shell.showItemInFolder(target)
   })
   ipcMain.on('notch:quit', () => {
@@ -436,9 +445,13 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  // First, before anything reads `platform`: an unsupported OS gets a dialog and
+  // an exit rather than the Windows implementation and a mystery PowerShell error.
+  if (!assertSupportedPlatform()) return
+
   // Must stay byte-identical to `build.appId` in package.json, or Windows
   // treats the running app and the installed shortcut as different identities
-  // and taskbar pinning silently stops working.
+  // and taskbar pinning silently stops working. A no-op off Windows.
   app.setAppUserModelId('dev.notch.app')
 
   // A status overlay has no business with the camera, the microphone, location,

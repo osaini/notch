@@ -11,6 +11,7 @@ import type {
 import { NOTCH_POSITION_PRESETS } from '@shared/types'
 import { Listbox } from '../components/Listbox'
 import { durationUntil } from '../format'
+import { usePlatform } from '../platform'
 
 interface Props {
   settings: AppSettings
@@ -37,6 +38,7 @@ export function Settings({
   onToggleHooks,
   onChange
 }: Props): React.JSX.Element {
+  const platformInfo = usePlatform()
   const [displays, setDisplays] = useState<DisplayOption[]>([])
   const [saving, setSaving] = useState(false)
   const [mobile, setMobile] = useState<MobileBridgeStatus | null>(null)
@@ -224,11 +226,9 @@ export function Settings({
         )}
       </section>
 
-      {/* TODO(platform): the relaunch gesture is OS-specific — this becomes
-          PlatformInfo.relaunchHint once the platform layer lands. */}
       <p className="footnote">
-        After choosing Quit, reopen Notch from the Start menu if installed, or double-click the
-        packaged Notch.exe.
+        After choosing Quit, reopen {platformInfo?.productName ?? 'Notch'}{' '}
+        {platformInfo ? platformInfo.relaunchHint : 'from where you installed it'}.
       </p>
     </div>
   )

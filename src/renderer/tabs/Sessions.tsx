@@ -6,6 +6,7 @@ import type {
   SessionsSnapshot
 } from '@shared/types'
 import { relativeTime, shortPath } from '../format'
+import { usePlatform } from '../platform'
 
 interface Props {
   snapshot: SessionsSnapshot
@@ -39,6 +40,10 @@ function statusClass(session: SessionState): string {
 export function Sessions({ snapshot, hooks, onToggleHooks }: Props): React.JSX.Element {
   const { sessions, error, designError, prunedCount, counts } = snapshot
   const [message, setMessage] = useState<string | null>(null)
+  const platformInfo = usePlatform()
+  // Absent until the first IPC round trip; assume the feature exists until told
+  // otherwise, so the empty-state copy does not flicker on every mount.
+  const hasDesignDetection = platformInfo?.features.designWindows ?? true
 
   return (
     <div className="tab-pane sessions-pane">
@@ -60,8 +65,10 @@ export function Sessions({ snapshot, hooks, onToggleHooks }: Props): React.JSX.E
         <div className="empty">
           <p>No live or recently active agent sessions.</p>
           <p className="muted">
-            Claude uses PID session files; Codex uses recent rollout activity; Claude Design is
-            detected from its Claude Desktop window.
+            Claude uses PID session files; Codex uses recent rollout activity
+            {hasDesignDetection
+              ? '; Claude Design is detected from its Claude Desktop window.'
+              : '. Claude Design cannot be detected on this platform.'}
           </p>
         </div>
       )}

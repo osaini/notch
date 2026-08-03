@@ -267,15 +267,50 @@ export interface AgentVersions {
   probedAt: number | null
 }
 
+/**
+ * Which terminal actually ran the agent. Per-platform, so the renderer must not
+ * assume the Windows pair — see `LAUNCHER_LABELS`.
+ */
+export type DispatchLauncher = 'wt' | 'powershell' | 'apple-terminal' | 'iterm2'
+
+/** Display names for each launcher, so no tab hardcodes a platform's terminal. */
+export const LAUNCHER_LABELS: Record<DispatchLauncher, string> = {
+  wt: 'Windows Terminal',
+  powershell: 'PowerShell',
+  'apple-terminal': 'Terminal',
+  iterm2: 'iTerm2'
+}
+
 export interface DispatchResult {
   ok: boolean
   /** The exact command line used, for display and debugging. */
   command: string
-  launcher: 'wt' | 'powershell'
+  launcher: DispatchLauncher
   transport: 'managed-codex' | 'legacy-cli'
   sessionId?: string
   threadId?: string
   error?: string
+}
+
+/**
+ * What the renderer needs to know about the host OS, so no tab hardcodes
+ * Windows-only copy or offers a feature this platform does not have.
+ */
+export interface PlatformInfo {
+  os: 'win32' | 'darwin'
+  productName: string
+  /** Primary terminal for dispatch, e.g. "Windows Terminal" / "Terminal". */
+  terminalLabel: string
+  /** How to reopen the app after Quit, e.g. "from the Start menu". */
+  relaunchHint: string
+  features: {
+    /** Whether focusing a session's host window does anything. */
+    focusWindows: boolean
+    /** Whether Claude Design windows can be detected at all. */
+    designWindows: boolean
+    /** Whether an agent pair opens as two panes rather than two windows. */
+    splitPane: boolean
+  }
 }
 
 export interface SessionActionResult {
@@ -435,6 +470,8 @@ export interface NotchApi {
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
   getDisplays(): Promise<DisplayOption[]>
+  /** Host OS copy and feature flags. Static for the process lifetime. */
+  getPlatformInfo(): Promise<PlatformInfo>
   getMobileBridgeStatus(): Promise<MobileBridgeStatus>
   regenerateMobilePairing(): Promise<MobileBridgeStatus>
   clearMobileDevices(): Promise<MobileBridgeStatus>

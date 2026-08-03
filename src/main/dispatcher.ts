@@ -1,9 +1,7 @@
-import { spawn } from 'node:child_process'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type {
-  AgentKind,
   DispatchRequest,
   DispatchResult,
   PermissionMode,
@@ -11,6 +9,9 @@ import type {
 } from '@shared/types'
 import { buildImplementerPrompt, buildReviewerPrompt } from './comboPrompts'
 import type { ManagedCodexService } from './managedCodex'
+import { platform } from './platform'
+import { runFirstWorkingPlan } from './platform/launch'
+import type { LaunchPlan, TerminalRunRequest } from './platform/types'
 
 const CLAUDE_MODES: PermissionMode[] = [
   'default',
@@ -18,25 +19,6 @@ const CLAUDE_MODES: PermissionMode[] = [
   'plan',
   'bypassPermissions'
 ]
-
-/**
- * Builds the argv for Windows Terminal.
- *
- * Verified on Windows Terminal + Claude Code 2.1.220: the `--` terminator is
- * REQUIRED. Without it wt parses `--permission-mode` as one of its own
- * `new-tab` options and the tab dies immediately.
- */
-export function buildWtArgs(cwd: string, claudeArgs: string[]): string[] {
-  return ['-d', cwd, '--', 'claude', ...claudeArgs]
-}
-
-export function buildAgentWtArgs(
-  cwd: string,
-  agent: AgentKind,
-  agentArgs: string[]
-): string[] {
-  return ['-d', cwd, '--', agent, ...agentArgs]
-}
 
 export function buildClaudeArgs(req: DispatchRequest): string[] {
   const args: string[] = []
@@ -103,28 +85,8 @@ export const ORCHESTRATOR_ENTRY = 'debug-orchestrator/orchestrate.mjs'
  * `orchestrate.mjs` derives its repo root from its own file location, so the
  * script always scans the project it lives in.
  */
-export function buildBugSearchWtArgs(cwd: string): string[] {
-  return ['-d', cwd, '--', 'node', ORCHESTRATOR_ENTRY, 'scan']
-}
-
-/**
- * Two agents, one window, two panes.
- *
- * `;` is Windows Terminal's pane delimiter. Because argv is passed as an array
- * and never as a shell string, it is safe — and required — as its own element;
- * embedding it in an adjacent argument would make wt parse the whole thing as
- * one command.
- */
-export function buildAdversarialWtArgs(
-  cwd: string,
-  claudeArgs: string[],
-  codexArgs: string[]
-): string[] {
-  return [
-    '-d', cwd, '--', 'claude', ...claudeArgs,
-    ';',
-    'split-pane', '-d', cwd, '--', 'codex', ...codexArgs
-  ]
+export function buildBugSearchRequest(cwd: string): TerminalRunRequest {
+  return { cwd, exe: 'node', args: [ORCHESTRATOR_ENTRY, 'scan'] }
 }
 
 /**
@@ -164,10 +126,30 @@ export function buildAdversarialArgs(req: DispatchRequest): {
   }
 }
 
-/** Renders argv for display only — not used to actually spawn. */
-function displayCommand(exe: string, args: string[]): string {
-  const quoted = args.map((a) => (/\s/.test(a) ? `"${a}"` : a))
-  return [exe, ...quoted].join(' ')
+/**
+ * Runs the platform's launch plans and shapes the outcome into a DispatchResult.
+ *
+ * No plans means the platform has no terminal integration yet; that degrades to
+ * a typed failure rather than throwing, so the UI can say so.
+ */
+async function runPlans(plans: LaunchPlan[]): Promise<DispatchResult> {
+  if (plans.length === 0) {
+    return {
+      ok: false,
+      command: '',
+      launcher: platform.terminal.primaryLauncher,
+      transport: 'legacy-cli',
+      error: `Launching a terminal is not available on ${platform.os} yet.`
+    }
+  }
+  const outcome = await runFirstWorkingPlan(plans)
+  return {
+    ok: outcome.ok,
+    command: outcome.plan.display,
+    launcher: outcome.plan.launcher,
+    transport: 'legacy-cli',
+    ...(outcome.error ? { error: outcome.error } : {})
+  }
 }
 
 async function isDirectory(dir: string): Promise<boolean> {
@@ -179,11 +161,13 @@ async function isDirectory(dir: string): Promise<boolean> {
 }
 
 /**
- * Spawns a detached Claude Code session in its own terminal window.
+ * Spawns a detached agent session in its own terminal window.
  *
  * Args are passed as an array, never as a shell string, so prompts containing
  * quotes, `;` (which Windows Terminal treats as a pane delimiter) or `&` are
- * handed to claude verbatim.
+ * handed to the agent verbatim. That invariant now lives in
+ * `TerminalIntegration`, which every platform's launch plans must honour — see
+ * SECURITY.md.
  */
 export async function dispatch(
   req: DispatchRequest,
@@ -194,7 +178,7 @@ export async function dispatch(
     return {
       ok: false,
       command: '',
-      launcher: 'wt',
+      launcher: platform.terminal.primaryLauncher,
       transport: 'legacy-cli',
       error: 'No project directory selected'
     }
@@ -203,7 +187,7 @@ export async function dispatch(
     return {
       ok: false,
       command: '',
-      launcher: 'wt',
+      launcher: platform.terminal.primaryLauncher,
       transport: 'legacy-cli',
       error: `Not a directory: ${cwd}`
     }
@@ -222,47 +206,7 @@ export async function dispatch(
     }
   }
   const agentArgs = agent === 'codex' ? buildCodexArgs(req) : buildClaudeArgs(req)
-  const wtArgs = buildAgentWtArgs(cwd, agent, agentArgs)
-  const wtCommand = displayCommand('wt.exe', wtArgs)
-
-  try {
-    await spawnDetached('wt.exe', wtArgs)
-    return {
-      ok: true,
-      command: wtCommand,
-      launcher: 'wt',
-      transport: 'legacy-cli'
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      return {
-        ok: false,
-        command: wtCommand,
-        launcher: 'wt',
-        transport: 'legacy-cli',
-        error: (err as Error).message
-      }
-    }
-  }
-
-  const fallbackCommand = `powershell.exe -NoExit -- ${agent} ${agentArgs.length} argument(s)`
-  try {
-    await spawnPowerShellConsole(cwd, agent, agentArgs)
-    return {
-      ok: true,
-      command: fallbackCommand,
-      launcher: 'powershell',
-      transport: 'legacy-cli'
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      command: fallbackCommand,
-      launcher: 'powershell',
-      transport: 'legacy-cli',
-      error: (err as Error).message
-    }
-  }
+  return runPlans(platform.terminal.agentPlans({ cwd, exe: agent, args: agentArgs }))
 }
 
 /** True when the project carries its own copy of the bug-search pipeline. */
@@ -286,56 +230,19 @@ async function dispatchCombo(req: DispatchRequest, cwd: string): Promise<Dispatc
   const wantsBugSearch = req.comboWorkflow === 'bug-search'
   const bugSearch = wantsBugSearch && (await hasOrchestrator(cwd))
 
-  const wtArgs = bugSearch
-    ? buildBugSearchWtArgs(cwd)
-    : (() => {
-        const { claudeArgs, codexArgs } = buildAdversarialArgs(req)
-        return buildAdversarialWtArgs(cwd, claudeArgs, codexArgs)
-      })()
-  const wtCommand = displayCommand('wt.exe', wtArgs)
-
-  try {
-    await spawnDetached('wt.exe', wtArgs)
-    return { ok: true, command: wtCommand, launcher: 'wt', transport: 'legacy-cli' }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      return {
-        ok: false,
-        command: wtCommand,
-        launcher: 'wt',
-        transport: 'legacy-cli',
-        error: (err as Error).message
-      }
-    }
+  // The pipeline is a single command, so it is an ordinary agent launch. Only
+  // the adversarial pair wants two commands side by side.
+  if (bugSearch) {
+    return runPlans(platform.terminal.agentPlans(buildBugSearchRequest(cwd)))
   }
 
-  // No Windows Terminal: two separate consoles instead of two panes.
-  const fallbackCommand = bugSearch
-    ? 'powershell.exe -NoExit -- node debug-orchestrator/orchestrate.mjs scan'
-    : 'powershell.exe -NoExit -- claude + codex (2 consoles)'
-  try {
-    if (bugSearch) {
-      await spawnPowerShellConsole(cwd, 'node', [ORCHESTRATOR_ENTRY, 'scan'])
-    } else {
-      const { claudeArgs, codexArgs } = buildAdversarialArgs(req)
-      await spawnPowerShellConsole(cwd, 'claude', claudeArgs)
-      await spawnPowerShellConsole(cwd, 'codex', codexArgs)
-    }
-    return {
-      ok: true,
-      command: fallbackCommand,
-      launcher: 'powershell',
-      transport: 'legacy-cli'
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      command: fallbackCommand,
-      launcher: 'powershell',
-      transport: 'legacy-cli',
-      error: (err as Error).message
-    }
-  }
+  const { claudeArgs, codexArgs } = buildAdversarialArgs(req)
+  return runPlans(
+    platform.terminal.pairPlans(
+      { cwd, exe: 'claude', args: claudeArgs },
+      { cwd, exe: 'codex', args: codexArgs }
+    )
+  )
 }
 
 /**
@@ -349,9 +256,10 @@ export async function getRecentProjects(sessions: SessionState[]): Promise<strin
 
   const add = (raw: string): void => {
     if (!raw) return
-    const normalized = path.win32.normalize(raw.replace(/\//g, '\\')).replace(/[\\/]+$/, '')
+    const normalized = platform.paths.normalizeProjectPath(raw)
     if (!normalized) return
-    const key = normalized.toLowerCase()
+    // Windows folds case here; POSIX must not, or two real paths collapse.
+    const key = platform.paths.projectPathKey(normalized)
     if (!seen.has(key)) seen.set(key, normalized)
   }
 
@@ -370,47 +278,3 @@ export async function getRecentProjects(sessions: SessionState[]): Promise<strin
   return dirs.filter((_, i) => checks[i])
 }
 
-/** Resolves once the child is spawned; rejects if the exe cannot be found. */
-function spawnDetached(exe: string, args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(exe, args, {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false
-    })
-    child.once('error', reject)
-    child.once('spawn', () => {
-      child.unref()
-      resolve()
-    })
-  })
-}
-
-/**
- * Safe no-Windows-Terminal fallback. User-controlled values are base64-decoded
- * inside a fixed PowerShell program and invoked as an argument array; they are
- * never interpolated into shell syntax.
- */
-function spawnPowerShellConsole(
-  cwd: string,
-  /** Executable name — an agent CLI, or `node` for the pipeline. */
-  agent: string,
-  args: string[]
-): Promise<void> {
-  const encode = (value: string): string => Buffer.from(value, 'utf8').toString('base64')
-  const encodedArgs = args.map((arg) => `'${encode(arg)}'`).join(', ')
-  const script = `
-$decode = { param([string]$value) [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($value)) }
-$targetDir = & $decode '${encode(cwd)}'
-$agentArgs = @(${encodedArgs}) | ForEach-Object { & $decode $_ }
-Set-Location -LiteralPath $targetDir
-& '${agent}' @agentArgs
-`
-  const encodedScript = Buffer.from(script, 'utf16le').toString('base64')
-  return spawnDetached('powershell.exe', [
-    '-NoProfile',
-    '-NoExit',
-    '-EncodedCommand',
-    encodedScript
-  ])
-}

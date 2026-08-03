@@ -12,6 +12,8 @@ import type {
   PendingInteraction,
   StructuredQuestion
 } from '@shared/types'
+import { platform } from './platform'
+import { runFirstWorkingPlan, spawnDetached } from './platform/launch'
 
 interface RpcMessage {
   id?: number | string
@@ -169,25 +171,6 @@ export async function waitForRolloutReady(
   throw new Error(`Codex session was not ready to resume: ${lastError}`)
 }
 
-function displayCommand(exe: string, args: string[]): string {
-  return [exe, ...args.map((arg) => (/\s/.test(arg) ? `"${arg}"` : arg))].join(' ')
-}
-
-function spawnDetached(exe: string, args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(exe, args, {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false
-    })
-    child.once('error', reject)
-    child.once('spawn', () => {
-      child.unref()
-      resolve()
-    })
-  })
-}
-
 async function unusedLoopbackPort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer()
@@ -295,15 +278,23 @@ export class ManagedCodexService extends EventEmitter {
 
     const model = compatibleModelOverride(string(started?.model), models)
     const codexArgs = managedCodexResumeArgs(this.state.endpoint!, threadId)
-    const args = ['-d', request.cwd, '--', 'codex', ...codexArgs]
-    const command = displayCommand('wt.exe', args)
+    // The plans are built up front because the error paths below report the
+    // command that *would* have run, before any launch is attempted.
+    const plans = platform.terminal.agentPlans({
+      cwd: request.cwd,
+      exe: 'codex',
+      args: codexArgs
+    })
+    const primary = plans[0]
+    const command = primary?.display ?? ''
+    const launcher = primary?.launcher ?? platform.terminal.primaryLauncher
     const rolloutPath = string(thread?.path)
     if (!rolloutPath) {
       this.threads.delete(threadId)
       return {
         ok: false,
         command,
-        launcher: 'wt',
+        launcher,
         transport: 'managed-codex',
         sessionId: threadId,
         threadId,
@@ -334,7 +325,7 @@ export class ManagedCodexService extends EventEmitter {
       return {
         ok: false,
         command,
-        launcher: 'wt',
+        launcher,
         transport: 'managed-codex',
         sessionId: threadId,
         threadId,
@@ -342,58 +333,30 @@ export class ManagedCodexService extends EventEmitter {
       }
     }
 
-    try {
-      await this.launchDetached('wt.exe', args)
+    const outcome = await runFirstWorkingPlan(plans, this.launchDetached)
+    if (!outcome.ok) {
+      // Every launcher failed. Throwing here would let the caller fall back to a
+      // fresh CLI session while this turn keeps running — the same duplicated
+      // work the rollout-failure path guards against.
+      await this.abandonTurn(threadId, turnId)
+      this.threads.delete(threadId)
       return {
-        ok: true,
-        command,
-        launcher: 'wt',
+        ok: false,
+        command: outcome.plan.display,
+        launcher: outcome.plan.launcher,
         transport: 'managed-codex',
         sessionId: threadId,
-        threadId
+        threadId,
+        error: `${outcome.error ?? 'No terminal could be launched'}. The terminal was not opened.`
       }
-    } catch {
-      const encode = (value: string): string =>
-        Buffer.from(value, 'utf8').toString('base64')
-      const script = `
-$decode = { param([string]$value) [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($value)) }
-Set-Location -LiteralPath (& $decode '${encode(request.cwd)}')
-$arguments = @(
-${codexArgs.map((arg) => `  (& $decode '${encode(arg)}')`).join('\n')}
-)
-& 'codex' @arguments
-`
-      try {
-        await this.launchDetached('powershell.exe', [
-          '-NoProfile',
-          '-NoExit',
-          '-EncodedCommand',
-          Buffer.from(script, 'utf16le').toString('base64')
-        ])
-      } catch (error) {
-        // Both launchers failed. Throwing here would let the caller fall back
-        // to a fresh CLI session while this turn keeps running — the same
-        // duplicated work the rollout-failure path guards against.
-        await this.abandonTurn(threadId, turnId)
-        this.threads.delete(threadId)
-        return {
-          ok: false,
-          command,
-          launcher: 'powershell',
-          transport: 'managed-codex',
-          sessionId: threadId,
-          threadId,
-          error: `${(error as Error).message}. The terminal was not opened.`
-        }
-      }
-      return {
-        ok: true,
-        command: `powershell.exe -NoExit -- codex --remote ${this.state.endpoint} resume ${threadId}`,
-        launcher: 'powershell',
-        transport: 'managed-codex',
-        sessionId: threadId,
-        threadId
-      }
+    }
+    return {
+      ok: true,
+      command: outcome.plan.display,
+      launcher: outcome.plan.launcher,
+      transport: 'managed-codex',
+      sessionId: threadId,
+      threadId
     }
   }
 

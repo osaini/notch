@@ -31,15 +31,15 @@ import {
 import {
   ORCHESTRATOR_ENTRY,
   buildAdversarialArgs,
-  buildAdversarialWtArgs,
-  buildBugSearchWtArgs,
-  buildWtArgs,
-  buildAgentWtArgs,
+  buildBugSearchRequest,
   buildClaudeArgs,
   buildCodexArgs,
   getRecentProjects,
   hasOrchestrator
 } from '../src/main/dispatcher'
+// The Windows argv builders are imported from the win32 platform explicitly, not
+// through `platform`, so these assertions keep covering Windows on any host OS.
+import { buildPairWtArgs, buildWtArgs } from '../src/main/platform/win32/terminal'
 
 const pass = (msg: string): void => console.log(`  PASS  ${msg}`)
 const fail = (msg: string): void => {
@@ -547,7 +547,9 @@ async function checkDispatch(): Promise<void> {
     permissionMode: 'plan',
     attachments: ['C:\\shot.png']
   })
-  const wt = buildWtArgs('C:\\proj', args)
+  // Against win32Platform directly rather than the host platform: these builders
+  // are pure, so the Windows argv stays covered even when this runs on a Mac.
+  const wt = buildWtArgs({ cwd: 'C:\\proj', exe: 'claude', args })
   info(JSON.stringify(wt))
 
   if (wt[3] === 'claude' && wt[2] === '--') pass('wt argv uses the required "--" terminator')
@@ -567,7 +569,7 @@ async function checkDispatch(): Promise<void> {
     prompt: 'inspect safely',
     permissionMode: 'codex-on-request'
   })
-  const codexWt = buildAgentWtArgs('C:\\proj', 'codex', codexArgs)
+  const codexWt = buildWtArgs({ cwd: 'C:\\proj', exe: 'codex', args: codexArgs })
   if (codexWt[3] === 'codex' && codexArgs.includes('on-request')) {
     pass('Codex dispatch argv carries the selected approval policy')
   } else {
@@ -583,7 +585,10 @@ async function checkDispatch(): Promise<void> {
     attachments: ['C:\\notes.md']
   }
   const { claudeArgs, codexArgs: reviewerArgs } = buildAdversarialArgs(comboReq)
-  const pair = buildAdversarialWtArgs('C:\\proj', claudeArgs, reviewerArgs)
+  const pair = buildPairWtArgs(
+    { cwd: 'C:\\proj', exe: 'claude', args: claudeArgs },
+    { cwd: 'C:\\proj', exe: 'codex', args: reviewerArgs }
+  )
   info(JSON.stringify(pair))
 
   const delimiter = pair.indexOf(';')
@@ -655,7 +660,7 @@ async function checkDispatch(): Promise<void> {
     fail('role prompts are malformed')
   }
 
-  const bugSearch = buildBugSearchWtArgs('C:\\proj')
+  const bugSearch = buildWtArgs(buildBugSearchRequest('C:\\proj'))
   if (
     bugSearch[3] === 'node' &&
     bugSearch[4] === ORCHESTRATOR_ENTRY &&
