@@ -177,6 +177,14 @@ export interface OverlayIntegration {
    * MUST NOT throw: every reposition and every drag frame calls this.
    */
   pillArea(display: Electron.Display): Electron.Rectangle
+  /**
+   * Physical display cutout in Electron screen coordinates, when one exists.
+   *
+   * MUST NOT throw. A missing probe, malformed platform response, or ordinary
+   * rectangular display is represented by `null` so overlay geometry can fall
+   * back to the compact pill without risking the startup path.
+   */
+  displayCutout(display: Electron.Display): Electron.Rectangle | null
   /** Per-platform tweaks applied once after the window exists. MUST NOT throw. */
   afterCreate(win: Electron.BrowserWindow): void
 }

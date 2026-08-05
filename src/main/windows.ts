@@ -78,8 +78,9 @@ export const OVERLAY_HEIGHT = 660
 /** How often we check whether the cursor has left an interactive window. */
 const CURSOR_POLL_MS = 200
 /** Pill geometry inside the overlay; mirrors --pill-h and the wrap size in styles.css. */
-const PILL_THICKNESS = 32
-const PILL_LENGTH = 276
+export const PILL_THICKNESS = 32
+export const PILL_LENGTH = 276
+export const HARDWARE_PILL_LENGTH = 476
 /** Maximum along-edge distance from a named preset before drag snaps to it. */
 const PRESET_SNAP_DISTANCE = 44
 /** How far past its resting line the pill must be pulled to fly free of the edge. */
@@ -122,6 +123,14 @@ interface DragSession {
   /** Which edge the pill is currently previewing; its axis is the pill's shape. */
   edge: ScreenEdge
   floating: boolean
+  /** Keeps the hardware-width rail stable until this gesture is released. */
+  hardware: { thickness: number; cutout: Electron.Rectangle } | null
+}
+
+interface PillGeometry {
+  width: number
+  height: number
+  cutout?: Electron.Rectangle
 }
 
 interface MotionState {
@@ -155,6 +164,25 @@ function roundCoord(value: number): number {
   return rounded === 0 ? 0 : rounded
 }
 
+/** Visible hit rectangles for a collapsed rail; the physical cutout is never one. */
+export function visiblePillRegions(
+  bounds: Electron.Rectangle,
+  cutout: Electron.Rectangle | null
+): Electron.Rectangle[] {
+  if (!cutout) return [{ ...bounds }]
+  const leftWidth = Math.max(0, cutout.x - bounds.x)
+  const rightX = Math.min(bounds.x + bounds.width, cutout.x + cutout.width)
+  const rightWidth = Math.max(0, bounds.x + bounds.width - rightX)
+  return [
+    ...(leftWidth > 0
+      ? [{ x: bounds.x, y: bounds.y, width: leftWidth, height: bounds.height }]
+      : []),
+    ...(rightWidth > 0
+      ? [{ x: rightX, y: bounds.y, width: rightWidth, height: bounds.height }]
+      : [])
+  ]
+}
+
 export class NotchWindow {
   private win: BrowserWindow | null = null
   private interactive: boolean | null = null
@@ -165,6 +193,7 @@ export class NotchWindow {
   private drag: DragSession | null = null
   private appliedOrigin: Point | null = null
   private sentDragState: NotchDragState | null = null
+  private settledGeometry: PillGeometry = { width: PILL_LENGTH, height: PILL_THICKNESS }
   private peekUntil = 0
   private settings: AppSettings = {
     position: { displayId: null, edge: 'top', offset: 0.5 },
@@ -314,10 +343,12 @@ export class NotchWindow {
     this.stopMotion()
     const edge = this.settings.position.edge
     const display = this.displayFor(this.settings.position)
-    const origin = this.windowOriginFor(pill, edge, display)
+    const geometry = this.pillGeometryFor(this.settings.position, display)
+    this.settledGeometry = geometry
+    const origin = this.windowOriginFor(pill, edge, display, geometry)
     this.win.setBounds({ ...origin, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT })
     this.appliedOrigin = origin
-    this.emitDragState(false, edge, false, 0, this.paintOffset(this.restPaint(pill, edge, display)))
+    this.emitDragState(false, edge, false, 0, this.paintOffset(this.restPaint(pill, edge, display, geometry)))
   }
 
   /**
@@ -333,18 +364,33 @@ export class NotchWindow {
       // draw the pill inside the window.
       if (this.motion) this.reposition(false)
       const edge = this.settings.position.edge
+      const display = this.displayFor(this.settings.position)
+      const hardware = this.hardwareGeometry(this.settings.position, display)
+      const geometry = hardware ?? this.compactGeometry(edge)
       const grab = this.axisOf(edge) === 'horizontal' ? input.grabX ?? 0 : input.grabY ?? 0
       this.drag = {
-        grabAlong: clamp(grab, -PILL_LENGTH / 2, PILL_LENGTH / 2),
+        grabAlong: clamp(
+          grab,
+          -(this.axisOf(edge) === 'horizontal' ? geometry.width : geometry.height) / 2,
+          (this.axisOf(edge) === 'horizontal' ? geometry.width : geometry.height) / 2
+        ),
         edge,
-        floating: false
+        floating: false,
+        hardware: hardware
+          ? { thickness: hardware.height, cutout: { ...hardware.cutout! } }
+          : null
       }
       // Freeze `paint` at what is on screen right now, not the plain per-edge
       // anchor: near the ends of the travel the resting pill is already drawn
       // off-centre, and starting from the anchor would jolt it on first frame.
       const resting = this.settings.position
       this.beginDragMotion(
-        this.restPaint(this.pillCentreFor(resting), edge, this.displayFor(resting))
+        this.restPaint(
+          this.pillCentreFor(resting),
+          edge,
+          this.displayFor(resting),
+          geometry
+        )
       )
     }
 
@@ -453,12 +499,13 @@ export class NotchWindow {
       const point = screen.getCursorScreenPoint()
       const b = this.win.getBounds()
       if (!this.interactive) {
-        const pill = this.collapsedPillBounds()
-        const overPill =
-          point.x >= pill.x &&
-          point.x < pill.x + pill.width &&
-          point.y >= pill.y &&
-          point.y < pill.y + pill.height
+        const { bounds: pill, cutout } = this.collapsedPillBounds()
+        const overPill = visiblePillRegions(pill, cutout).some((region) =>
+          point.x >= region.x &&
+          point.x < region.x + region.width &&
+          point.y >= region.y &&
+          point.y < region.y + region.height
+        )
         if (overPill) {
           // Make the transparent native surface interactive before asking the
           // renderer to animate. Switching it in the middle of the first CSS
@@ -481,17 +528,29 @@ export class NotchWindow {
    * from the window, because near the ends of the travel the pill is drawn
    * off-centre inside a window that has been held inside the display.
    */
-  private collapsedPillBounds(): Electron.Rectangle {
-    const edge = this.settings.position.edge
+  private collapsedPillBounds(): {
+    bounds: Electron.Rectangle
+    cutout: Electron.Rectangle | null
+  } {
+    const display = this.displayFor(this.settings.position)
     const centre = this.pillCentreFor(this.settings.position)
-    const horizontal = this.axisOf(edge) === 'horizontal'
-    const width = horizontal ? PILL_LENGTH : PILL_THICKNESS
-    const height = horizontal ? PILL_THICKNESS : PILL_LENGTH
+    const geometry = this.pillGeometryFor(this.settings.position, display)
+    const bounds = {
+      x: roundCoord(centre.x - geometry.width / 2),
+      y: roundCoord(centre.y - geometry.height / 2),
+      width: geometry.width,
+      height: geometry.height
+    }
     return {
-      x: roundCoord(centre.x - width / 2),
-      y: roundCoord(centre.y - height / 2),
-      width,
-      height
+      bounds,
+      cutout: geometry.cutout
+        ? {
+            x: bounds.x + geometry.cutout.x,
+            y: bounds.y + geometry.cutout.y,
+            width: geometry.cutout.width,
+            height: geometry.cutout.height
+          }
+        : null
     }
   }
 
@@ -512,18 +571,81 @@ export class NotchWindow {
     return edge === 'top' || edge === 'bottom' ? 'horizontal' : 'vertical'
   }
 
+  private compactGeometry(edge: ScreenEdge): PillGeometry {
+    return this.axisOf(edge) === 'horizontal'
+      ? { width: PILL_LENGTH, height: PILL_THICKNESS }
+      : { width: PILL_THICKNESS, height: PILL_LENGTH }
+  }
+
+  /**
+   * A hardware rail is valid only where the physical cutout actually is: the
+   * top-centre preset of a display whose cutout is itself centred. AppKit data
+   * that is off-screen or too wide for the overlay degrades to the compact pill.
+   */
+  private hardwareGeometry(
+    position: NotchPosition,
+    display: Electron.Display
+  ): PillGeometry | null {
+    if (position.edge !== 'top' || Math.abs(position.offset - 0.5) > 0.001) return null
+    const cutout = this.overlay.displayCutout(display)
+    if (!cutout) return null
+    const displayCentre = display.bounds.x + display.bounds.width / 2
+    const cutoutCentre = cutout.x + cutout.width / 2
+    const railLeft = displayCentre - HARDWARE_PILL_LENGTH / 2
+    if (
+      Math.abs(cutoutCentre - displayCentre) >= 1 ||
+      Math.abs(cutout.y - display.bounds.y) >= 1 ||
+      cutout.width <= 0 ||
+      cutout.height <= 0 ||
+      railLeft < display.bounds.x ||
+      railLeft + HARDWARE_PILL_LENGTH > display.bounds.x + display.bounds.width
+    ) {
+      return null
+    }
+    return {
+      width: HARDWARE_PILL_LENGTH,
+      height: cutout.height,
+      cutout: {
+        x: cutout.x - railLeft,
+        y: 0,
+        width: cutout.width,
+        height: cutout.height
+      }
+    }
+  }
+
+  private pillGeometryFor(position: NotchPosition, display: Electron.Display): PillGeometry {
+    return this.hardwareGeometry(position, display) ?? this.compactGeometry(position.edge)
+  }
+
+  private motionGeometry(edge: ScreenEdge): PillGeometry {
+    const hardware = this.drag?.hardware
+    if (!hardware) {
+      return edge === this.settings.position.edge
+        ? this.settledGeometry
+        : this.compactGeometry(edge)
+    }
+    if (this.axisOf(edge) === 'horizontal') {
+      return {
+        width: HARDWARE_PILL_LENGTH,
+        height: hardware.thickness,
+        ...(edge === 'top' ? { cutout: { ...hardware.cutout } } : {})
+      }
+    }
+    return { width: hardware.thickness, height: HARDWARE_PILL_LENGTH }
+  }
+
   /** Where the renderer draws the pill's centre inside the overlay, per edge. */
-  private pillAnchor(edge: ScreenEdge): Point {
-    const half = PILL_THICKNESS / 2
+  private pillAnchor(edge: ScreenEdge, geometry = this.compactGeometry(edge)): Point {
     switch (edge) {
       case 'top':
-        return { x: OVERLAY_WIDTH / 2, y: half }
+        return { x: OVERLAY_WIDTH / 2, y: geometry.height / 2 }
       case 'bottom':
-        return { x: OVERLAY_WIDTH / 2, y: OVERLAY_HEIGHT - half }
+        return { x: OVERLAY_WIDTH / 2, y: OVERLAY_HEIGHT - geometry.height / 2 }
       case 'left':
-        return { x: half, y: OVERLAY_HEIGHT / 2 }
+        return { x: geometry.width / 2, y: OVERLAY_HEIGHT / 2 }
       default:
-        return { x: OVERLAY_WIDTH - half, y: OVERLAY_HEIGHT / 2 }
+        return { x: OVERLAY_WIDTH - geometry.width / 2, y: OVERLAY_HEIGHT / 2 }
     }
   }
 
@@ -549,9 +671,9 @@ export class NotchWindow {
    * allows: a top-edge paint of (260, 16) becomes (260, 138), moving in y only.
    */
   private fitPaint(paint: Point, edge: ScreenEdge): Point {
-    const horizontal = this.axisOf(edge) === 'horizontal'
-    const marginX = horizontal ? PILL_LENGTH / 2 : PILL_THICKNESS / 2
-    const marginY = horizontal ? PILL_THICKNESS / 2 : PILL_LENGTH / 2
+    const geometry = this.motionGeometry(edge)
+    const marginX = geometry.width / 2
+    const marginY = geometry.height / 2
     return {
       x: clamp(paint.x, marginX, OVERLAY_WIDTH - marginX),
       y: clamp(paint.y, marginY, OVERLAY_HEIGHT - marginY)
@@ -577,20 +699,28 @@ export class NotchWindow {
    * behind the camera housing. Note this is deliberately NOT what `getDisplays`
    * reports — that describes the physical monitor to the user in Settings.
    */
-  private pillArea(display: Electron.Display): Electron.Rectangle {
-    return this.overlay.pillArea(display)
+  private pillArea(display: Electron.Display, edge?: ScreenEdge): Electron.Rectangle {
+    const area = this.overlay.pillArea(display)
+    if (edge !== 'top' || !this.motionGeometry('top').cutout) return area
+    const cutout = this.overlay.displayCutout(display)
+    if (!cutout) return area
+    const bottom = area.y + area.height
+    if (cutout.y >= bottom) return area
+    return { x: area.x, y: cutout.y, width: area.width, height: bottom - cutout.y }
   }
 
   private alongRange(
     edge: ScreenEdge,
-    display: Electron.Display
+    display: Electron.Display,
+    geometry = this.compactGeometry(edge)
   ): { lo: number; hi: number; travel: number } {
-    const bounds = this.pillArea(display)
+    const bounds = this.pillArea(display, edge)
     const horizontal = this.axisOf(edge) === 'horizontal'
     const span = horizontal ? bounds.width : bounds.height
     const start = horizontal ? bounds.x : bounds.y
-    const travel = Math.max(0, span - PILL_LENGTH)
-    const lo = start + Math.min(PILL_LENGTH / 2, span / 2)
+    const length = horizontal ? geometry.width : geometry.height
+    const travel = Math.max(0, span - length)
+    const lo = start + Math.min(length / 2, span / 2)
     return { lo, hi: lo + travel, travel }
   }
 
@@ -605,10 +735,11 @@ export class NotchWindow {
   private windowOriginFor(
     pillCentre: Point,
     edge: ScreenEdge,
-    display: Electron.Display
+    display: Electron.Display,
+    geometry = this.compactGeometry(edge)
   ): Point {
-    const anchor = this.pillAnchor(edge)
-    const bounds = this.pillArea(display)
+    const anchor = this.pillAnchor(edge, geometry)
+    const bounds = this.pillArea(display, edge)
     let x = pillCentre.x - anchor.x
     let y = pillCentre.y - anchor.y
     if (this.axisOf(edge) === 'horizontal') {
@@ -624,15 +755,30 @@ export class NotchWindow {
    * `pillCentre` once the window has been held inside the display. At rest this
    * is what `paint` settles to; away from the ends it equals `pillAnchor`.
    */
-  private restPaint(pillCentre: Point, edge: ScreenEdge, display: Electron.Display): Point {
-    const origin = this.windowOriginFor(pillCentre, edge, display)
+  private restPaint(
+    pillCentre: Point,
+    edge: ScreenEdge,
+    display: Electron.Display,
+    geometry = this.compactGeometry(edge)
+  ): Point {
+    const origin = this.windowOriginFor(pillCentre, edge, display, geometry)
     return { x: pillCentre.x - origin.x, y: pillCentre.y - origin.y }
   }
 
   /** The screen point the pill's centre rests at for a persisted position. */
   private pillCentreFor(position: NotchPosition): Point {
     const display = this.displayFor(position)
-    const bounds = this.pillArea(display)
+    const hardware = this.hardwareGeometry(position, display)
+    if (hardware?.cutout) {
+      const cutout = this.overlay.displayCutout(display)
+      if (cutout) {
+        return {
+          x: display.bounds.x + display.bounds.width / 2,
+          y: cutout.y + hardware.height / 2
+        }
+      }
+    }
+    const bounds = this.pillArea(display, position.edge)
     const { lo, travel } = this.alongRange(position.edge, display)
     const along = lo + travel * clamp(position.offset, 0, 1)
     const rest = PILL_THICKNESS / 2
@@ -676,12 +822,22 @@ export class NotchWindow {
     sticky?: ScreenEdge
   ): { edge: ScreenEdge; distance: number } {
     const bounds = this.pillArea(display)
-    const rest = PILL_THICKNESS
+    const topBounds = this.pillArea(display, 'top')
+    const top = this.motionGeometry('top')
+    const bottom = this.motionGeometry('bottom')
+    const left = this.motionGeometry('left')
+    const right = this.motionGeometry('right')
     const candidates = [
-      { edge: 'top' as ScreenEdge, distance: point.y - bounds.y - rest },
-      { edge: 'bottom' as ScreenEdge, distance: bounds.y + bounds.height - point.y - rest },
-      { edge: 'left' as ScreenEdge, distance: point.x - bounds.x - rest },
-      { edge: 'right' as ScreenEdge, distance: bounds.x + bounds.width - point.x - rest }
+      { edge: 'top' as ScreenEdge, distance: point.y - topBounds.y - top.height },
+      {
+        edge: 'bottom' as ScreenEdge,
+        distance: bounds.y + bounds.height - point.y - bottom.height
+      },
+      { edge: 'left' as ScreenEdge, distance: point.x - bounds.x - left.width },
+      {
+        edge: 'right' as ScreenEdge,
+        distance: bounds.x + bounds.width - point.x - right.width
+      }
     ]
     const score = (entry: { edge: ScreenEdge; distance: number }): number =>
       entry.distance - (entry.edge === sticky ? EDGE_STICKINESS : 0)
@@ -699,9 +855,10 @@ export class NotchWindow {
     display: Electron.Display,
     detach: number
   ): Point {
-    const bounds = this.pillArea(display)
+    const bounds = this.pillArea(display, edge)
     const horizontal = this.axisOf(edge) === 'horizontal'
-    const { lo, hi, travel } = this.alongRange(edge, display)
+    const geometry = this.motionGeometry(edge)
+    const { lo, hi, travel } = this.alongRange(edge, display, geometry)
     let along = clamp(horizontal ? anchor.x : anchor.y, lo, hi)
     if (travel > 0) {
       const magnet = NOTCH_POSITION_PRESETS.filter((preset) => preset.edge === edge)
@@ -709,7 +866,8 @@ export class NotchWindow {
         .find((presetAlong) => Math.abs(along - presetAlong) <= PRESET_SNAP_DISTANCE)
       if (magnet !== undefined) along = magnet
     }
-    const lift = PILL_THICKNESS / 2 + RUBBER_BAND * detach * detach
+    const thickness = horizontal ? geometry.height : geometry.width
+    const lift = thickness / 2 + RUBBER_BAND * detach * detach
     switch (edge) {
       case 'top':
         return { x: along, y: bounds.y + lift }
@@ -724,17 +882,19 @@ export class NotchWindow {
 
   /** Pill centre while detached: under the cursor, but never off the display. */
   private freePillCentre(anchor: Point, edge: ScreenEdge, display: Electron.Display): Point {
-    const bounds = this.pillArea(display)
-    const { lo, hi } = this.alongRange(edge, display)
-    const half = PILL_THICKNESS / 2
+    const bounds = this.pillArea(display, edge)
+    const geometry = this.motionGeometry(edge)
+    const { lo, hi } = this.alongRange(edge, display, geometry)
+    const halfX = geometry.width / 2
+    const halfY = geometry.height / 2
     if (this.axisOf(edge) === 'horizontal') {
       return {
         x: clamp(anchor.x, lo, hi),
-        y: clamp(anchor.y, bounds.y + half, bounds.y + bounds.height - half)
+        y: clamp(anchor.y, bounds.y + halfY, bounds.y + bounds.height - halfY)
       }
     }
     return {
-      x: clamp(anchor.x, bounds.x + half, bounds.x + bounds.width - half),
+      x: clamp(anchor.x, bounds.x + halfX, bounds.x + bounds.width - halfX),
       y: clamp(anchor.y, lo, hi)
     }
   }
@@ -787,7 +947,9 @@ export class NotchWindow {
   ): void {
     // Lands on the drawn position the pill will hold at rest, which near the
     // ends of the travel is offset from the plain per-edge anchor.
-    const paintTarget = this.restPaint(pill, edge, display)
+    const geometry = this.pillGeometryFor(this.settings.position, display)
+    this.settledGeometry = geometry
+    const paintTarget = this.restPaint(pill, edge, display, geometry)
     const current = this.motion
     const from = {
       pill: { ...(current?.pill ?? this.pillCentreFor(this.settings.position)) },
@@ -910,13 +1072,17 @@ export class NotchWindow {
     offset: Point
   ): void {
     if (!this.win || this.win.isDestroyed()) return
+    const geometry = this.motionGeometry(edge)
     const next: NotchDragState = {
       active,
       edge,
       floating,
       detach: Math.round(detach * 1000) / 1000,
       offsetX: Math.round(offset.x * 10) / 10,
-      offsetY: Math.round(offset.y * 10) / 10
+      offsetY: Math.round(offset.y * 10) / 10,
+      pillWidth: geometry.width,
+      pillHeight: geometry.height,
+      ...(geometry.cutout ? { cutout: { ...geometry.cutout } } : {})
     }
     const previous = this.sentDragState
     if (
@@ -926,6 +1092,12 @@ export class NotchWindow {
       previous.floating === next.floating &&
       previous.offsetX === next.offsetX &&
       previous.offsetY === next.offsetY &&
+      previous.pillWidth === next.pillWidth &&
+      previous.pillHeight === next.pillHeight &&
+      previous.cutout?.x === next.cutout?.x &&
+      previous.cutout?.y === next.cutout?.y &&
+      previous.cutout?.width === next.cutout?.width &&
+      previous.cutout?.height === next.cutout?.height &&
       Math.abs(previous.detach - next.detach) < 0.004
     ) {
       return
@@ -944,8 +1116,11 @@ export class NotchWindow {
   getDragState(): NotchDragState {
     if (this.sentDragState) return this.sentDragState
     const position = this.settings.position
+    const display = this.displayFor(position)
     const pill = this.pillCentreFor(position)
-    const paint = this.restPaint(pill, position.edge, this.displayFor(position))
+    const geometry = this.pillGeometryFor(position, display)
+    this.settledGeometry = geometry
+    const paint = this.restPaint(pill, position.edge, display, geometry)
     const offset = this.paintOffset(paint)
     return {
       active: false,
@@ -953,7 +1128,10 @@ export class NotchWindow {
       floating: false,
       detach: 0,
       offsetX: Math.round(offset.x * 10) / 10,
-      offsetY: Math.round(offset.y * 10) / 10
+      offsetY: Math.round(offset.y * 10) / 10,
+      pillWidth: geometry.width,
+      pillHeight: geometry.height,
+      ...(geometry.cutout ? { cutout: { ...geometry.cutout } } : {})
     }
   }
 

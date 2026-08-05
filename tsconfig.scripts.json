@@ -21,6 +21,7 @@
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     // testStatusFlash drives the renderer's flash state machine directly.
-    "src/renderer/statusFlash.ts"
+    "src/renderer/statusFlash.ts",
+    "src/renderer/pillStatus.ts"
   ]
 }

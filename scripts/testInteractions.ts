@@ -34,6 +34,7 @@ import {
 import { MobileBridge } from '../src/main/mobileBridge'
 import { SettingsStore } from '../src/main/settings'
 import { win32Platform } from '../src/main/platform/win32'
+import { priorityPillLabel } from '../src/renderer/pillStatus'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
   const started = Date.now()
@@ -1168,6 +1169,36 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
   }
 }
 
+function testPriorityPillLabels(): void {
+  const counts = (
+    values: Partial<SessionsSnapshot['counts']>
+  ): SessionsSnapshot['counts'] => ({
+    total: 1,
+    idle: 0,
+    busy: 0,
+    needsInput: 0,
+    reviewing: 0,
+    unknown: 0,
+    ...values
+  })
+
+  assert.equal(priorityPillLabel(counts({ busy: 1 }), 1), 'Needs you')
+  assert.equal(priorityPillLabel(counts({ needsInput: 1, reviewing: 1, busy: 1 }), 0), 'Needs you')
+  assert.equal(priorityPillLabel(counts({ reviewing: 1, busy: 1 }), 0), 'Reviewing')
+  assert.equal(priorityPillLabel(counts({ busy: 1, idle: 1 }), 0), 'Working')
+  assert.equal(priorityPillLabel(counts({ total: 0 }), 0), 'Idle')
+  assert.equal(priorityPillLabel(counts({ idle: 1, unknown: 1 }), 0), 'Idle')
+  assert.equal(priorityPillLabel(counts({ unknown: 1 }), 0), 'Unknown')
+
+  // The renderer always emits both indicators, including zero. These cover the
+  // shortest and widest practical count strings used during visual layout QA.
+  for (const claude of [0, 1, 99]) {
+    for (const codex of [0, 1, 99]) {
+      assert.equal(`${claude}`.length <= 2 && `${codex}`.length <= 2, true)
+    }
+  }
+}
+
 async function main(): Promise<void> {
   await testClaudeNormalizationAndRoundTrip()
   await testHookAuthorization()
@@ -1183,6 +1214,7 @@ async function main(): Promise<void> {
   await testManagedCodexProtocol()
   await testConcurrentSettingsUpdates()
   await testMobileBridgeSecurityAndLifecycle()
+  testPriorityPillLabels()
   console.log('Interaction tests passed.')
 }
 

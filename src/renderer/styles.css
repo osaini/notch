@@ -129,6 +129,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .stage {
   --detach: 0;
   --detach-radius: 0px;
+  --pill-width: 276px;
+  --pill-height: 32px;
+  --wrap-width: 476px;
+  --wrap-height: calc(549px + var(--pill-height));
   /*
    * Where this edge's flex alignment already puts the pill relative to the
    * centre of the window, negated. The pill is placed from the window centre
@@ -143,7 +147,7 @@ button { -webkit-tap-highlight-color: transparent; }
    * alignment's worth inward of the window all through a drag.
    */
   --pill-align-x: 0px;
-  --pill-align-y: 39.5px;
+  --pill-align-y: calc((660px - var(--wrap-height)) / 2);
   display: flex;
   width: 100%;
   height: 100%;
@@ -151,14 +155,19 @@ button { -webkit-tap-highlight-color: transparent; }
   justify-content: center;
   pointer-events: none;
 }
-.stage.edge-bottom { align-items: flex-end; --pill-align-y: -39.5px; }
+.stage.edge-bottom {
+  align-items: flex-end;
+  --pill-align-y: calc((var(--wrap-height) - 660px) / 2);
+}
 .stage.edge-left {
+  --wrap-height: 581px;
   align-items: center;
   justify-content: flex-start;
   --pill-align-x: 22px;
   --pill-align-y: 0px;
 }
 .stage.edge-right {
+  --wrap-height: 581px;
   align-items: center;
   justify-content: flex-end;
   --pill-align-x: -22px;
@@ -168,8 +177,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .notch-wrap {
   position: relative;
   isolation: isolate;
-  width: 476px;
-  height: 581px;
+  width: var(--wrap-width);
+  height: var(--wrap-height);
   pointer-events: none;
   filter: drop-shadow(0 8px 13px rgba(0,0,0,.5));
   transition: transform 240ms cubic-bezier(.4,0,.2,1);
@@ -205,7 +214,11 @@ button { -webkit-tap-highlight-color: transparent; }
   height: 100%;
   overflow: hidden;
   background: var(--notch);
-  clip-path: inset(274.5px 100px 274.5px 100px round var(--detach-radius) var(--detach-radius) 14px 14px);
+  clip-path: inset(
+    calc((var(--wrap-height) - var(--pill-height)) / 2)
+    calc((var(--wrap-width) - var(--pill-width)) / 2)
+    round var(--detach-radius) var(--detach-radius) 14px 14px
+  );
   pointer-events: auto;
   transition: clip-path 240ms cubic-bezier(.4,0,.2,1);
   will-change: clip-path;
@@ -219,15 +232,27 @@ button { -webkit-tap-highlight-color: transparent; }
 .edge-bottom .notch-wrap::before { background: radial-gradient(circle at 0 0, transparent 0 15px, var(--notch) 15px); }
 .edge-bottom .notch-wrap::after { background: radial-gradient(circle at 100% 0, transparent 0 15px, var(--notch) 15px); }
 .edge-bottom .notch {
-  clip-path: inset(274.5px 100px 274.5px 100px round 14px 14px var(--detach-radius) var(--detach-radius));
+  clip-path: inset(
+    calc((var(--wrap-height) - var(--pill-height)) / 2)
+    calc((var(--wrap-width) - var(--pill-width)) / 2)
+    round 14px 14px var(--detach-radius) var(--detach-radius)
+  );
 }
 .edge-bottom .notch.open { clip-path: inset(0 round 16px 16px 0 0); }
 
 .edge-left .notch {
-  clip-path: inset(152.5px 222px 152.5px 222px round var(--detach-radius) 14px 14px var(--detach-radius));
+  clip-path: inset(
+    calc((var(--wrap-height) - var(--pill-height)) / 2)
+    calc((var(--wrap-width) - var(--pill-width)) / 2)
+    round var(--detach-radius) 14px 14px var(--detach-radius)
+  );
 }
 .edge-right .notch {
-  clip-path: inset(152.5px 222px 152.5px 222px round 14px var(--detach-radius) var(--detach-radius) 14px);
+  clip-path: inset(
+    calc((var(--wrap-height) - var(--pill-height)) / 2)
+    calc((var(--wrap-width) - var(--pill-width)) / 2)
+    round 14px var(--detach-radius) var(--detach-radius) 14px
+  );
 }
 .edge-left .notch.open { clip-path: inset(0 round 0 16px 16px 0); }
 .edge-right .notch.open { clip-path: inset(0 round 16px 0 0 16px); }
@@ -311,10 +336,10 @@ button { -webkit-tap-highlight-color: transparent; }
   --flash-scale-y: 1.19;
   position: absolute;
   z-index: 2;
-  top: 274.5px;
-  left: 100px;
-  width: 276px;
-  height: var(--pill-h);
+  top: calc((var(--wrap-height) - var(--pill-height)) / 2);
+  left: calc((var(--wrap-width) - var(--pill-width)) / 2);
+  width: var(--pill-width);
+  height: var(--pill-height);
   border-radius: 0 0 14px 14px;
   color: var(--grey);
   pointer-events: none;
@@ -354,10 +379,6 @@ button { -webkit-tap-highlight-color: transparent; }
 .edge-right .pill-status-flash {
   --flash-scale-x: 1.19;
   --flash-scale-y: 1.022;
-  top: 152.5px;
-  left: 222px;
-  width: 32px;
-  height: 276px;
 }
 .edge-left .pill-status-flash {
   border-radius: 0 14px 14px 0;
@@ -369,12 +390,12 @@ button { -webkit-tap-highlight-color: transparent; }
 .pill {
   position: absolute;
   z-index: 1;
-  top: 274.5px;
-  left: 100px;
+  top: calc((var(--wrap-height) - var(--pill-height)) / 2);
+  left: calc((var(--wrap-width) - var(--pill-width)) / 2);
   display: flex;
-  width: 276px;
-  height: var(--pill-h);
-  padding: 0 8px 0 7px;
+  width: var(--pill-width);
+  height: var(--pill-height);
+  padding: 0 10px;
   align-items: center;
   gap: 9px;
   color: #cfcabe;
@@ -386,16 +407,12 @@ button { -webkit-tap-highlight-color: transparent; }
     width 240ms cubic-bezier(.4,0,.2,1),
     height 240ms cubic-bezier(.4,0,.2,1);
 }
-.notch.open .pill { top: 0; left: 0; width: 476px; }
+.notch.open .pill { top: 0; left: 0; width: 476px; height: var(--pill-height); }
 .pill:active { cursor: grabbing; }
 .takeover-active .pill { background: #1c0f0c; }
-/* The taller padding keeps the grip and the pin clear of the rounded end caps,
-   which sit across the bar's short side here rather than off its ends. */
+/* Taller padding keeps the content clear of the rounded end caps, which sit
+   across the bar's short side here rather than off its ends. */
 .edge-left .pill, .edge-right .pill {
-  top: 152.5px;
-  left: 222px;
-  width: 32px;
-  height: 276px;
   flex-direction: column;
   padding: 11px 0;
 }
@@ -403,9 +420,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .edge-left .notch.open .pill { top: 0; left: 0; width: 32px; height: 581px; }
 .edge-right .notch.open .pill { top: 0; left: 444px; width: 32px; height: 581px; }
 
-.grip { display: grid; grid-template-columns: repeat(2, 2px); gap: 2.5px; flex: none; opacity: .42; }
-.grip i { width: 2px; height: 2px; border-radius: 50%; background: #edeae2; }
-.edge-left .grip, .edge-right .grip { grid-template-columns: repeat(3, 2px); }
+.pill-status,
+.pill-agents { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.pill-agents { flex: none; gap: 10px; }
 .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--grey); color: var(--grey); }
 .status-green .pill .dot { color: var(--green); background: var(--green); }
 .status-yellow .pill .dot { color: var(--yellow); background: var(--yellow); animation: beacon 1.9s ease-in-out infinite; }
@@ -421,37 +438,50 @@ button { -webkit-tap-highlight-color: transparent; }
 .agent-count i { width: 5px; height: 5px; flex: none; }
 .agent-count.claude i { border-radius: 1.5px; background: #d9775a; }
 .agent-count.codex i { border-radius: 50%; background: var(--steel); }
-.pill-divider { width: 1px; height: 12px; flex: none; background: #33312c; }
 /* The label is the one thing long enough to need turning: it runs down the bar
    and ellipsizes along it, where laid out flat it would be clipped to a slice of
    itself by a 32px column. The counts are two glyphs wide and stay flat, icon
    beside number, so they can still be read at a glance. `min-height` is what
    lets the turned label shrink below its content size inside the column flex. */
+.edge-left .pill-status, .edge-right .pill-status,
+.edge-left .pill-agents, .edge-right .pill-agents {
+  flex-direction: column;
+}
 .edge-left .pill-label, .edge-right .pill-label {
   min-height: 0;
   writing-mode: vertical-rl;
 }
-.edge-left .pill-divider, .edge-right .pill-divider { width: 12px; height: 1px; }
-.pin-button {
+
+/* The camera cutout is a true dead zone: the rail has one independent drag
+   surface on each side, and nothing is laid out or hit-tested in the centre. */
+.hardware-notch.edge-top .pill {
   display: grid;
-  width: 19px;
-  height: 19px;
   padding: 0;
-  flex: none;
-  place-items: center;
-  border: 0;
-  border-radius: 5px;
-  color: #7e7768;
-  background: transparent;
-  cursor: pointer;
+  grid-template-columns:
+    var(--cutout-left)
+    var(--cutout-width)
+    calc(var(--pill-width) - var(--cutout-left) - var(--cutout-width));
+  gap: 0;
 }
-.pin-button:hover { color: #f0ede5; background: rgba(255,255,255,.07); }
-.pin-button.active { color: #d9775a; background: rgba(217,119,90,.16); }
-.pin-button svg { width: 13px; height: 13px; fill: currentColor; }
+.hardware-notch.edge-top .pill-status {
+  grid-column: 1;
+  padding: 0 12px;
+  overflow: hidden;
+  cursor: grab;
+}
+.hardware-notch.edge-top .pill-spacer { display: none; }
+.hardware-notch.edge-top .pill-agents {
+  grid-column: 3;
+  padding: 0 12px;
+  justify-content: center;
+  cursor: grab;
+}
+.hardware-notch.edge-top .pill-wing:active { cursor: grabbing; }
+.hardware-notch .pill-status-flash { display: none; }
 
 .panel {
   position: absolute;
-  top: var(--pill-h);
+  top: var(--pill-height);
   left: 50%;
   width: 476px;
   height: 549px;
@@ -474,7 +504,7 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .edge-bottom .panel {
   top: auto;
-  bottom: var(--pill-h);
+  bottom: var(--pill-height);
   border-top: 0;
   border-bottom: 1px solid var(--surface-raised);
   transform: translate(-50%, 8px);

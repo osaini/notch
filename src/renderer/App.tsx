@@ -19,6 +19,7 @@ import {
   StatusFlashTracker,
   type FlashColor
 } from './statusFlash'
+import { priorityPillLabel } from './pillStatus'
 
 type TabId = 'sessions' | 'usage' | 'dispatch' | 'tray' | 'settings'
 
@@ -78,7 +79,6 @@ export function App(): React.JSX.Element {
   const [interactions, setInteractions] = useState<PendingInteraction[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   const [expanded, setExpanded] = useState(false)
-  const [pinned, setPinned] = useState(false)
   const [tab, setTab] = useState<TabId>('sessions')
   const [attachments, setAttachments] = useState<string[]>([])
   const [dismissedInteraction, setDismissedInteraction] = useState<string | null>(null)
@@ -114,7 +114,7 @@ export function App(): React.JSX.Element {
   const dragging = drag?.active ?? false
   // The panel rides along collapsed: dragging a 476px sheet around feels heavy,
   // and the pill is the only part the gesture is about.
-  const open = !dragging && (expanded || pinned || takeover || Boolean(confirmation))
+  const open = !dragging && (expanded || takeover || Boolean(confirmation))
   // While dragging the notch must keep receiving pointer events even though it
   // is collapsed, or the native window would go click-through mid-gesture.
   const interactive = open || dragging
@@ -150,7 +150,6 @@ export function App(): React.JSX.Element {
     const unsubExpand = window.notch.onForceExpand(() => setExpanded(true))
     const unsubCollapse = window.notch.onForceCollapse(() => {
       setExpanded(false)
-      setPinned(false)
     })
     void window.notch.getDragState().then(setDrag)
     void window.notch.getSessions().then(acceptSessions)
@@ -281,7 +280,6 @@ export function App(): React.JSX.Element {
           setDismissedInteraction(activeInteraction.id)
           return
         }
-        setPinned(false)
         setExpanded(false)
       }
     }
@@ -290,17 +288,7 @@ export function App(): React.JSX.Element {
   }, [activeInteraction, takeover])
 
   const label = useMemo(() => {
-    if (interactions.length > 0) {
-      return `${interactions.length} needs you`
-    }
-    const counts = snapshot.counts
-    if (counts.total === 0) return 'idle'
-    const parts: string[] = []
-    if (counts.needsInput) parts.push(`${counts.needsInput} needs you`)
-    if (counts.reviewing) parts.push(`${counts.reviewing} reviewing`)
-    if (counts.busy) parts.push(`${counts.busy} working`)
-    if (counts.idle) parts.push(`${counts.idle} idle`)
-    return parts.join(' · ')
+    return priorityPillLabel(snapshot.counts, interactions.length)
   }, [interactions.length, snapshot])
 
   const displayColor = interactions.length > 0 ? 'red' : snapshot.color
@@ -329,8 +317,21 @@ export function App(): React.JSX.Element {
     setExpanded(true)
   }, [])
 
-  const onNotchMouseLeave = useCallback((): void => {
+  const onNotchMouseLeave = useCallback((event: React.MouseEvent<HTMLDivElement>): void => {
     if (gestureRef.current || hoverLeaveTimerRef.current !== null) return
+    if (edge === 'top' && drag?.cutout) {
+      const stillOverWing = Array.from(
+        event.currentTarget.querySelectorAll<HTMLElement>('.pill-wing')
+      ).some((wing) => {
+        const rect = wing.getBoundingClientRect()
+        return event.clientX >= rect.left && event.clientX < rect.right &&
+          event.clientY >= rect.top && event.clientY < rect.bottom
+      })
+      // The expanding clip-path changes the hit-test outline around the cursor
+      // even though the hardware rail itself never moves. Do not treat that
+      // compositor boundary event as a genuine hover-out from either wing.
+      if (stillOverWing) return
+    }
     const delay = window.matchMedia('(prefers-reduced-motion: reduce)').matches
       ? 0
       : HOVER_LEAVE_GRACE_MS
@@ -338,7 +339,7 @@ export function App(): React.JSX.Element {
       hoverLeaveTimerRef.current = null
       if (!gestureRef.current) setExpanded(false)
     }, delay)
-  }, [])
+  }, [drag?.cutout, edge])
 
   // Cursor samples are coalesced to one per frame: pointermove can fire far
   // faster than the compositor, and every extra sample is a wasted window move.
@@ -353,9 +354,11 @@ export function App(): React.JSX.Element {
     })
   }, [])
 
-  const onPillPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
+  const onPillPointerDown = (event: React.PointerEvent<HTMLElement>): void => {
     if (event.button !== 0 || gestureRef.current) return
-    const pill = event.currentTarget
+    const handle = event.currentTarget
+    const pill = handle.closest('.pill')
+    if (!(pill instanceof HTMLElement)) return
     const rect = pill.getBoundingClientRect()
     gestureRef.current = {
       pointerId: event.pointerId,
@@ -371,10 +374,10 @@ export function App(): React.JSX.Element {
       started: false,
       frame: null
     }
-    pill.setPointerCapture(event.pointerId)
+    handle.setPointerCapture(event.pointerId)
   }
 
-  const onPillPointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
+  const onPillPointerMove = (event: React.PointerEvent<HTMLElement>): void => {
     const gesture = gestureRef.current
     if (!gesture || gesture.pointerId !== event.pointerId) return
     gesture.latest = { x: event.screenX, y: event.screenY }
@@ -400,7 +403,7 @@ export function App(): React.JSX.Element {
     }
   }
 
-  const onPillPointerUp = (event: React.PointerEvent<HTMLDivElement>): void => {
+  const onPillPointerUp = (event: React.PointerEvent<HTMLElement>): void => {
     const gesture = gestureRef.current
     if (!gesture || gesture.pointerId !== event.pointerId) return
     gestureRef.current = null
@@ -410,6 +413,14 @@ export function App(): React.JSX.Element {
     }
     if (!gesture.started) return
     window.notch.dragNotch({ phase: 'end', screenX: event.screenX, screenY: event.screenY })
+  }
+
+  const hardwareNotch = edge === 'top' && Boolean(drag?.cutout)
+  const gestureHandlers = {
+    onPointerDown: onPillPointerDown,
+    onPointerMove: onPillPointerMove,
+    onPointerUp: onPillPointerUp,
+    onPointerCancel: onPillPointerUp
   }
 
   return (
@@ -422,13 +433,18 @@ export function App(): React.JSX.Element {
         // open, the panel reclaims the per-edge alignment so it cannot be
         // pushed off the display by a pill parked at the end of its travel.
         open ? 'panel-open' : '',
+        hardwareNotch ? 'hardware-notch' : '',
         drag?.floating ? 'floating' : '',
         turning ? 'turning' : ''
       ].filter(Boolean).join(' ')}
       style={{
         '--detach': drag?.detach ?? 0,
         '--pill-dx': `${drag?.offsetX ?? 0}px`,
-        '--pill-dy': `${drag?.offsetY ?? 0}px`
+        '--pill-dy': `${drag?.offsetY ?? 0}px`,
+        '--pill-width': `${drag?.pillWidth ?? 276}px`,
+        '--pill-height': `${drag?.pillHeight ?? 32}px`,
+        '--cutout-left': `${drag?.cutout?.x ?? 0}px`,
+        '--cutout-width': `${drag?.cutout?.width ?? 0}px`
       } as React.CSSProperties}
     >
       <div className={`notch-wrap ${open ? 'open' : ''}`}>
@@ -447,35 +463,17 @@ export function App(): React.JSX.Element {
           <div
             className="pill"
             title="Drag to another screen edge"
-            onPointerDown={onPillPointerDown}
-            onPointerMove={onPillPointerMove}
-            onPointerUp={onPillPointerUp}
-            onPointerCancel={onPillPointerUp}
+            {...(!hardwareNotch ? gestureHandlers : {})}
           >
-            <span className="grip" aria-hidden="true">
-              {Array.from({ length: 6 }, (_, index) => <i key={index} />)}
+            <span className="pill-status pill-wing" {...(hardwareNotch ? gestureHandlers : {})}>
+              <span className="dot beacon" />
+              <span className="pill-label">{label}</span>
             </span>
-            <span className="dot beacon" />
-            <span className="pill-label">{label}</span>
             <span className="pill-spacer" />
-            <span className="agent-count claude"><i />{agentCounts.claude}</span>
-            <span className="agent-count codex"><i />{agentCounts.codex}</span>
-            <span className="pill-divider" />
-            <button
-              type="button"
-              className={pinned ? 'pin-button active' : 'pin-button'}
-              aria-label={pinned ? 'Unpin panel' : 'Pin panel open'}
-              aria-pressed={pinned}
-              title={pinned ? 'Unpin panel (Esc)' : 'Pin panel open'}
-              onPointerDown={(event) => event.stopPropagation()}
-              onPointerUp={(event) => event.stopPropagation()}
-              onPointerCancel={(event) => event.stopPropagation()}
-              onClick={() => setPinned((value) => !value)}
-            >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M10.9 1.5 14.5 5l-1.3 1.3-1-.9-2.4 2.4.5 2-1.1 1.1-2.4-2.4-3.5 3.5-.8 2.5-.9-.9 2.5-.8 3.5-3.5-2.4-2.4 1.1-1.1 2 .5 2.4-2.4-.9-1z" />
-              </svg>
-            </button>
+            <span className="pill-agents pill-wing" {...(hardwareNotch ? gestureHandlers : {})}>
+              <span className="agent-count claude" aria-label={`${agentCounts.claude} Claude sessions`}><i />{agentCounts.claude}</span>
+              <span className="agent-count codex" aria-label={`${agentCounts.codex} Codex sessions`}><i />{agentCounts.codex}</span>
+            </span>
           </div>
 
           <div className="panel" aria-hidden={!open}>
@@ -487,12 +485,10 @@ export function App(): React.JSX.Element {
                 onResponseAccepted={() => {
                   setDismissedInteraction(activeInteraction.id)
                   setConfirmation(activeInteraction.id)
-                  setPinned(false)
                   setExpanded(false)
                 }}
                 onOpenAgent={() => {
                   setDismissedInteraction(activeInteraction.id)
-                  setPinned(false)
                   setExpanded(false)
                 }}
               />
