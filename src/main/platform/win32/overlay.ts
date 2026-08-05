@@ -17,6 +17,10 @@ export const overlay: OverlayIntegration = {
     return display.bounds
   },
 
+  displayCutout() {
+    return null
+  },
+
   afterCreate() {
     // Nothing Windows-specific beyond the constructor options.
   }

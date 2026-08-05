@@ -7,8 +7,16 @@
  */
 import assert from 'node:assert/strict'
 import type { ScreenEdge } from '../src/shared/types'
-import { NotchWindow, OVERLAY_HEIGHT, OVERLAY_WIDTH } from '../src/main/windows'
+import {
+  HARDWARE_PILL_LENGTH,
+  NotchWindow,
+  OVERLAY_HEIGHT,
+  OVERLAY_WIDTH,
+  visiblePillRegions
+} from '../src/main/windows'
 import { win32Platform } from '../src/main/platform/win32'
+import { parseDisplayCutouts } from '../src/main/platform/darwin/displayCutout'
+import type { OverlayIntegration } from '../src/main/platform/types'
 
 interface Point {
   x: number
@@ -23,6 +31,16 @@ interface Geometry {
     sticky?: ScreenEdge
   ): { edge: ScreenEdge; distance: number }
   fitPaint(paint: Point, edge: ScreenEdge): Point
+  hardwareGeometry(
+    position: { displayId: string | null; edge: ScreenEdge; offset: number },
+    display: Electron.Display
+  ): { width: number; height: number; cutout?: Electron.Rectangle } | null
+  windowOriginFor(
+    pillCentre: Point,
+    edge: ScreenEdge,
+    display: Electron.Display,
+    geometry: { width: number; height: number }
+  ): Point
 }
 
 /**
@@ -171,5 +189,65 @@ for (const edge of ['top', 'bottom', 'left', 'right'] as ScreenEdge[]) {
     )
   }
 }
+
+// --- AppKit cutout conversion and hardware rail ----------------------------
+
+const appKitFixture = JSON.stringify([{
+  frame: { origin: { x: 0, y: 0 }, size: { width: 1512, height: 982 } },
+  safe: { top: 32, left: 0, bottom: 0, right: 0 },
+  left: { origin: { x: 0, y: 950 }, size: { width: 663, height: 32 } },
+  right: { origin: { x: 848, y: 950 }, size: { width: 664, height: 32 } }
+}])
+const [probe] = parseDisplayCutouts(appKitFixture)
+assert.deepEqual(probe, {
+  displayBounds: { x: 0, y: 0, width: 1512, height: 982 },
+  cutout: { x: 663, y: 0, width: 185, height: 32 }
+}, 'AppKit bottom-left coordinates map exactly to Electron screen coordinates')
+assert.deepEqual(parseDisplayCutouts('not json'), [], 'malformed probe output degrades safely')
+assert.deepEqual(parseDisplayCutouts('[]'), [], 'an unavailable screen list degrades safely')
+
+const notchedDisplay = {
+  id: 7,
+  bounds: probe.displayBounds,
+  workArea: { x: 0, y: 33, width: 1512, height: 891 }
+} as unknown as Electron.Display
+const notchedOverlay: OverlayIntegration = {
+  windowOptions: () => ({}),
+  pillArea: (target) => target.workArea,
+  displayCutout: () => ({ ...probe.cutout }),
+  afterCreate: () => undefined
+}
+const hardware = new NotchWindow(notchedOverlay) as unknown as Geometry
+const rail = hardware.hardwareGeometry(
+  { displayId: '7', edge: 'top', offset: 0.5 },
+  notchedDisplay
+)
+assert.deepEqual(rail, {
+  width: HARDWARE_PILL_LENGTH,
+  height: 32,
+  cutout: { x: 145, y: 0, width: 185, height: 32 }
+}, 'the 476-point rail reserves the exact 185-point local dead area')
+assert.deepEqual(
+  hardware.windowOriginFor({ x: 756, y: 16 }, 'top', notchedDisplay, rail!),
+  { x: 496, y: 0 },
+  'the overlay origin places the rail at screen x=518, y=0'
+)
+
+const railBounds = { x: 518, y: 0, width: 476, height: 32 }
+const cutoutBounds = { x: 663, y: 0, width: 185, height: 32 }
+assert.deepEqual(visiblePillRegions(railBounds, cutoutBounds), [
+  { x: 518, y: 0, width: 145, height: 32 },
+  { x: 848, y: 0, width: 146, height: 32 }
+], 'only the two visible wings participate in collapsed hover and drag')
+assert.equal(
+  hardware.hardwareGeometry({ displayId: '7', edge: 'top', offset: 0.25 }, notchedDisplay),
+  null,
+  'dragging away from top-centre restores compact geometry'
+)
+assert.equal(
+  hardware.hardwareGeometry({ displayId: '7', edge: 'left', offset: 0.5 }, notchedDisplay),
+  null,
+  'side edges never inherit hardware geometry'
+)
 
 console.log('pill geometry: all assertions passed')

@@ -73,6 +73,7 @@ for (const p of platforms) {
     assert.equal(typeof p.autostart.apply, 'function')
     assert.equal(typeof p.overlay.windowOptions, 'function')
     assert.equal(typeof p.overlay.pillArea, 'function')
+    assert.equal(typeof p.overlay.displayCutout, 'function')
     assert.equal(typeof p.overlay.afterCreate, 'function')
     assert.equal(typeof p.tray.image, 'function')
     assert.equal(typeof p.paths.normalizeProjectPath, 'function')
@@ -99,6 +100,19 @@ for (const p of platforms) {
       )
     }
     assert.ok(area.width > 0 && area.height > 0, 'the pill area must have extent')
+  })
+
+  check('overlay.displayCutout() does not throw', () => {
+    const cutout = p.overlay.displayCutout(DISPLAY)
+    assert.ok(cutout === null || (
+      Number.isFinite(cutout.x) &&
+      Number.isFinite(cutout.y) &&
+      Number.isFinite(cutout.width) &&
+      Number.isFinite(cutout.height) &&
+      cutout.width > 0 &&
+      cutout.height > 0
+    ))
+    if (p.os === 'win32') assert.equal(cutout, null)
   })
 
   check('info.features matches the implementations it describes', () => {

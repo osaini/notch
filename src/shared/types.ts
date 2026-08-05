@@ -397,6 +397,11 @@ export interface NotchDragState {
    */
   offsetX: number
   offsetY: number
+  /** Resolved collapsed pill size for this display and position. */
+  pillWidth: number
+  pillHeight: number
+  /** Physical cutout within the pill's local coordinate space, when reserved. */
+  cutout?: { x: number; y: number; width: number; height: number }
 }
 
 export type ThemePreference = 'dark' | 'light' | 'system'

@@ -1,5 +1,6 @@
 import { app } from 'electron'
 import type { OverlayIntegration } from '../types'
+import { displayCutout } from './displayCutout'
 
 /**
  * On the startup path: `windowOptions`, `pillArea` and `afterCreate` all run
@@ -9,15 +10,11 @@ import type { OverlayIntegration } from '../types'
  */
 export const overlay: OverlayIntegration = {
   windowOptions() {
-    return {
-      // macOS has no 'toolbar' type. A panel is the non-activating, floating
-      // equivalent, and keeps the overlay out of the window cycle.
-      // TODO(macos): verify against `setAlwaysOnTop('screen-saver')` and
-      // `setVisibleOnAllWorkspaces({visibleOnFullScreen:true})`, which
-      // windows.ts already applies and which interact with Spaces differently
-      // here than on Windows. See PORTING.md §2.
-      type: 'panel'
-    }
+    // AppKit otherwise constrains this borderless window to the visible frame,
+    // whose top starts below the menu bar. The hardware rail needs y=0 to use
+    // the safe areas beside the camera. This option disables that screen-frame
+    // constraint; the fixed 520×660 window still remains smaller than display.
+    return { enableLargerThanScreen: true }
   },
 
   /**
@@ -36,6 +33,8 @@ export const overlay: OverlayIntegration = {
   pillArea(display) {
     return display.workArea
   },
+
+  displayCutout,
 
   afterCreate() {
     // A tray overlay has no business in the Dock or in Cmd-Tab. `LSUIElement` in
