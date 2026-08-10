@@ -1,10 +1,9 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import http from 'node:http'
-import { networkInterfaces, hostname, homedir } from 'node:os'
+import { networkInterfaces, hostname } from 'node:os'
 import path from 'node:path'
 import type {
   AgentKind,
@@ -13,7 +12,9 @@ import type {
   MobileBridgeStatus,
   SessionState
 } from '@shared/types'
+import { findTranscript } from './claudeTranscript'
 import type { SessionWatcher } from './sessionWatcher'
+import { PROJECTS_DIR } from './usage'
 
 const DEFAULT_MOBILE_PORT = 47822
 const PORT_ATTEMPTS = 12
@@ -275,26 +276,6 @@ async function readTranscriptTail(file: string): Promise<string> {
   }
 }
 
-async function findTranscript(dir: string, sessionId: string): Promise<string | null> {
-  let entries: fs.Dirent[]
-  try {
-    entries = await fsp.readdir(dir, { withFileTypes: true })
-  } catch {
-    return null
-  }
-  const expected = `${sessionId}.jsonl`.toLowerCase()
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name)
-    if (entry.isFile() && entry.name.toLowerCase() === expected) return full
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const found = await findTranscript(path.join(dir, entry.name), sessionId)
-    if (found) return found
-  }
-  return null
-}
-
 export class MobileBridge extends EventEmitter {
   private server: http.Server | null = null
   private boundPort: number | null = null
@@ -302,7 +283,6 @@ export class MobileBridge extends EventEmitter {
   private pairingExpiresAt = 0
   private devices: StoredDevice[] = []
   private readonly devicesPath: string
-  private readonly claudeProjectsDir: string
   private readonly clients = new Set<http.ServerResponse>()
   private readonly runningSessions = new Set<string>()
   private readonly pairAttempts = new Map<string, PairAttempt>()
@@ -316,7 +296,6 @@ export class MobileBridge extends EventEmitter {
   constructor(private readonly options: MobileBridgeOptions) {
     super()
     this.devicesPath = path.join(options.userDataDir, 'mobile-devices.json')
-    this.claudeProjectsDir = path.join(homedir(), '.claude', 'projects')
   }
 
   private now(): number {
@@ -657,7 +636,7 @@ export class MobileBridge extends EventEmitter {
     const session = this.sessionFor(key)
     let transcript = session.transcriptPath || this.transcriptCache.get(key)
     if (!transcript && session.agent === 'claude') {
-      transcript = await findTranscript(this.claudeProjectsDir, session.sessionId) ?? undefined
+      transcript = await findTranscript(PROJECTS_DIR, session.sessionId) ?? undefined
       if (transcript) this.transcriptCache.set(key, transcript)
     }
     if (!transcript) return []
