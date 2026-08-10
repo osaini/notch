@@ -13,6 +13,7 @@ import type {
   SessionsSnapshot,
   StructuredQuestion
 } from '@shared/types'
+import { ClaudeTitleReader } from './claudeTranscript'
 import { DesignWatcher, type DesignWindow } from './designWatcher'
 import { platform } from './platform'
 
@@ -30,6 +31,7 @@ interface RawSession {
   sessionId?: unknown
   cwd?: unknown
   name?: unknown
+  nameSource?: unknown
   kind?: unknown
   status?: unknown
   version?: unknown
@@ -78,7 +80,7 @@ function timestamp(value: unknown, fallback = 0): number {
   return fallback
 }
 
-function cleanTitle(value: unknown): string {
+export function cleanTitle(value: unknown): string {
   if (typeof value !== 'string') return ''
   const compact = value.replace(/\s+/g, ' ').trim()
   if (!compact || compact.startsWith('<') || compact.startsWith('[')) return ''
@@ -197,7 +199,38 @@ function toAgentStatus(raw: string): AgentStatus {
   return 'unknown'
 }
 
-function parseClaudeSession(fileName: string, text: string): SessionState | null {
+/**
+ * Chooses the label for a Claude row.
+ *
+ * `nameSource` says where the session file's `name` came from: `user` is an
+ * explicit rename and `auto` is a generated job name, and both are labels the
+ * person running the session was meant to see, so they win outright.
+ *
+ * Anything else is a slug of the cwd (`windows-notch-40`), which tells two
+ * conversations in one project apart only by a hash — the transcript's title
+ * replaces it. The check is an allowlist rather than `!== 'derived'` because
+ * newer Claude Code drops `nameSource` once it syncs `name` from the title,
+ * and an unlabelled name must not be mistaken for a deliberate one.
+ */
+export function claudeDisplayName(
+  name: string,
+  nameSource: string,
+  aiTitle: string,
+  cwd: string,
+  pid: number
+): string {
+  if (name && (nameSource === 'user' || nameSource === 'auto')) return name
+  return aiTitle || name || (cwd ? path.basename(cwd) : `pid ${pid}`)
+}
+
+interface ParsedClaudeSession {
+  session: SessionState
+  /** Kept out of `SessionState`: it is Claude bookkeeping, not display state. */
+  nameSource: string
+  rawName: string
+}
+
+function parseClaudeSession(fileName: string, text: string): ParsedClaudeSession | null {
   let raw: RawSession
   try {
     raw = JSON.parse(text) as RawSession
@@ -214,13 +247,17 @@ function parseClaudeSession(fileName: string, text: string): SessionState | null
   const rawStatus = str(raw.status)
   const sessionId = str(raw.sessionId, `pid-${pid}`)
   const kind = str(raw.kind, 'unknown')
-  return {
+  const rawName = str(raw.name)
+  const nameSource = str(raw.nameSource)
+  const session: SessionState = {
     key: `claude:${sessionId}`,
     agent: 'claude',
     pid,
     sessionId,
     cwd,
-    name: str(raw.name) || (cwd ? path.basename(cwd) : `pid ${pid}`),
+    // Replaced with the transcript title in `scanOnce`, once the file has been
+    // read; this keeps the parser synchronous and free of I/O.
+    name: claudeDisplayName(rawName, nameSource, '', cwd, pid),
     kind,
     version: str(raw.version) || undefined,
     entrypoint: str(raw.entrypoint) || undefined,
@@ -237,6 +274,7 @@ function parseClaudeSession(fileName: string, text: string): SessionState | null
     // Claude's daemon-backed background PTY has no user-facing host window.
     canFocus: kind !== 'bg'
   }
+  return { session, nameSource, rawName }
 }
 
 function recordObject(value: unknown): Record<string, unknown> | null {
@@ -558,6 +596,7 @@ export class SessionWatcher extends EventEmitter {
   private reviewing = new Set<string>()
   private suppressed = new Set<string>()
   private codexCache = new Map<string, CodexCacheEntry>()
+  private titles = new ClaudeTitleReader()
   private externalInteractions: PendingInteraction[] = []
   private lastInteractionsSerialized = ''
   private lastSerialized = ''
@@ -724,8 +763,9 @@ export class SessionWatcher extends EventEmitter {
         } catch {
           continue
         }
-        const session = parseClaudeSession(file, text)
-        if (!session) continue
+        const parsed = parseClaudeSession(file, text)
+        if (!parsed) continue
+        const { session } = parsed
         if (!session.pid || !isPidAlive(session.pid)) {
           pruned++
           continue
@@ -736,6 +776,17 @@ export class SessionWatcher extends EventEmitter {
           continue
         }
         liveClaudeIds.add(session.sessionId)
+        // The session file only ever holds a cwd-derived slug, so the label a
+        // person recognises has to come out of the transcript.
+        const aiTitle = cleanTitle(await this.titles.titleFor(session.sessionId, session.cwd))
+        session.name = claudeDisplayName(
+          parsed.rawName,
+          parsed.nameSource,
+          aiTitle,
+          session.cwd,
+          session.pid
+        )
+        session.transcriptPath = this.titles.transcriptPath(session.sessionId)
         const blocked = this.needsInput.get(session.sessionId)
         if (blocked) {
           session.needsInput = true
@@ -752,6 +803,7 @@ export class SessionWatcher extends EventEmitter {
       error = (err as Error).message
     }
 
+    this.titles.prune(liveClaudeIds)
     for (const id of [...this.needsInput.keys()]) {
       if (!liveClaudeIds.has(id)) this.needsInput.delete(id)
     }

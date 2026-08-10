@@ -99,7 +99,10 @@ export function Sessions({ snapshot, hooks, onToggleHooks }: Props): React.JSX.E
             </span>
             <div className="session-main">
               <div className="session-title">
-                <span className="session-name">{session.name}</span>
+                {/* Chat titles are sentences and the row clamps to one line. */}
+                <span className="session-name" title={session.name}>
+                  {session.name}
+                </span>
                 {session.kind !== 'interactive' && session.kind !== 'design' && (
                   <span className="tag">{session.kind}</span>
                 )}

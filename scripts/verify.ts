@@ -7,10 +7,13 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   SessionWatcher,
+  claudeDisplayName,
+  cleanTitle,
   isPidAlive,
   parseCodexTitleIndex,
   toDesignSessions
 } from '../src/main/sessionWatcher'
+import { lastAiTitle, projectDirName } from '../src/main/claudeTranscript'
 import { DesignWatcher, DESIGN_WINDOW_TITLES } from '../src/main/designWatcher'
 import {
   HookServer,
@@ -71,6 +74,55 @@ async function checkSessions(): Promise<void> {
     fail('Codex Desktop title index did not parse correctly')
   }
 
+  // Claude writes its title repeatedly; the last record is the current one, and
+  // a chunked read hands us a severed first line as a matter of course.
+  const transcript = [
+    '{"type":"ai-title","aiTitle":"First title","sessionId":"s1"}',
+    '{"type":"user","message":{"role":"user","content":"hi"}}',
+    '{"type":"ai-title","aiTitle":"Renamed title","sessionId":"s1"}',
+    '{"type":"mode","mode":"normal"}'
+  ].join('\n')
+  const severed = `ontent":"hi"}}\n${transcript.split('\n').slice(2).join('\n')}`
+  if (
+    lastAiTitle(transcript) === 'Renamed title' &&
+    lastAiTitle(severed) === 'Renamed title' &&
+    lastAiTitle('{"type":"user","message":{}}') === ''
+  ) {
+    pass('transcript title parser takes the newest ai-title and tolerates a cut line')
+  } else {
+    fail('transcript title parser did not read the newest ai-title')
+  }
+
+  const encoded = {
+    'C:\\Users\\me': 'C--Users-me',
+    'C:\\Users\\me\\Projects\\windows-notch': 'C--Users-me-Projects-windows-notch',
+    'C:\\Users\\me\\Projects\\windows-notch\\.claude-worktrees\\fix-it':
+      'C--Users-me-Projects-windows-notch--claude-worktrees-fix-it',
+    '/home/me/projects/notch': '-home-me-projects-notch'
+  }
+  const wrongEncoding = Object.entries(encoded).filter(
+    ([cwd, expected]) => projectDirName(cwd) !== expected
+  )
+  if (wrongEncoding.length === 0) pass('project directory encoding matches ~/.claude/projects')
+  else fail(`project directory encoding wrong for ${wrongEncoding.map(([cwd]) => cwd).join(', ')}`)
+
+  // A derived slug is the one label the transcript title is allowed to replace.
+  const cwdFixture = path.join('C:', 'p', 'notch')
+  const title = 'Fix the sessions tab'
+  const naming: [string, string][] = [
+    [claudeDisplayName('notch-40', 'derived', title, cwdFixture, 7), title],
+    [claudeDisplayName('my thread', 'user', title, cwdFixture, 7), 'my thread'],
+    [claudeDisplayName('audit deps', 'auto', title, cwdFixture, 7), 'audit deps'],
+    // Newer Claude Code drops `nameSource` once it syncs the name itself.
+    [claudeDisplayName('notch-40', '', title, cwdFixture, 7), title],
+    [claudeDisplayName('notch-40', 'derived', '', cwdFixture, 7), 'notch-40'],
+    [claudeDisplayName('', '', '', cwdFixture, 7), 'notch'],
+    [claudeDisplayName('', '', '', '', 7), 'pid 7']
+  ]
+  const wrongNames = naming.filter(([actual, expected]) => actual !== expected)
+  if (wrongNames.length === 0) pass('session label prefers a real title over a derived slug')
+  else fail(`session label wrong: ${wrongNames.map(([a, e]) => `${a} != ${e}`).join('; ')}`)
+
   const watcher = new SessionWatcher()
   watcher.start()
   const scanDeadline = Date.now() + 4_000
@@ -102,6 +154,28 @@ async function checkSessions(): Promise<void> {
     pass('all reported Claude sessions have live PIDs')
   }
   else fail('a reported session has a dead PID')
+
+  // The point of the change: a live row whose session file holds nothing but a
+  // derived slug must be showing the transcript's title instead.
+  for (const session of claudeSessions) {
+    let slug = ''
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(path.join(os.homedir(), '.claude', 'sessions', `${session.pid}.json`), 'utf8')
+      ) as { name?: string; nameSource?: string }
+      const deliberate = raw.nameSource === 'user' || raw.nameSource === 'auto'
+      slug = deliberate ? '' : raw.name ?? ''
+    } catch {
+      continue
+    }
+    if (!slug) continue
+    const aiTitle = session.transcriptPath
+      ? cleanTitle(lastAiTitle(fs.readFileSync(session.transcriptPath, 'utf8')))
+      : ''
+    if (!aiTitle) info(`pid ${session.pid} has no transcript title yet (showing "${session.name}")`)
+    else if (session.name === aiTitle) pass(`pid ${session.pid} shows its chat title, not "${slug}"`)
+    else fail(`pid ${session.pid} shows "${session.name}"; transcript says "${aiTitle}"`)
+  }
 
   // A parked file is frozen at handoff, so it can never be the working row.
   const parkedBusy = claudeSessions.filter(
