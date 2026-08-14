@@ -1,6 +1,34 @@
 const { copyFile, readFile, unlink, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 
+const RETRYABLE_COPY_ERRORS = new Set(['EBUSY', 'EPERM', 'EACCES'])
+
+/**
+ * Antivirus and sync providers can briefly reopen a freshly generated PE file
+ * between electron-builder releasing it and this hook replacing it. Retry only
+ * those transient Windows lock errors; path and data errors must still fail
+ * immediately.
+ */
+async function copyFileWithRetry(
+  source,
+  target,
+  {
+    attempts = 12,
+    copy = copyFile,
+    sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+  } = {}
+) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await copy(source, target)
+      return
+    } catch (error) {
+      if (!RETRYABLE_COPY_ERRORS.has(error?.code) || attempt + 1 >= attempts) throw error
+      await sleep(Math.min(50 * 2 ** attempt, 1000))
+    }
+  }
+}
+
 /**
  * Electron Builder normally stamps the Windows icon through rcedit. That path
  * is disabled in this project because its tool archive requires symlink
@@ -70,8 +98,10 @@ module.exports = async function stampExecutableIcon(context) {
   resources.outputResource(executable)
   await writeFile(temporaryPath, Buffer.from(executable.generate()))
   try {
-    await copyFile(temporaryPath, executablePath)
+    await copyFileWithRetry(temporaryPath, executablePath)
   } finally {
     await unlink(temporaryPath).catch(() => {})
   }
 }
+
+module.exports.copyFileWithRetry = copyFileWithRetry
