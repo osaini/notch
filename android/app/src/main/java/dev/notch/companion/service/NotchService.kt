@@ -18,11 +18,25 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import dev.notch.companion.MainActivity
 import dev.notch.companion.R
+import dev.notch.companion.canPostNotifications
+import dev.notch.companion.setPrefsWatching
 import dev.notch.companion.data.Connection
 import dev.notch.companion.data.NotchRepository
 import dev.notch.companion.data.SessionStatus
+import dev.notch.companion.data.SessionSummary
+import dev.notch.companion.data.Snapshot
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+
+internal fun waitingSessions(
+  snapshot: Snapshot?,
+  connection: Connection
+): List<SessionSummary> =
+  if (connection == Connection.ONLINE) {
+    snapshot?.sessions.orEmpty().filter { it.status == SessionStatus.NEEDS_INPUT }
+  } else {
+    emptyList()
+  }
 
 /**
  * Holds the SSE connection while the app is in the background and raises a
@@ -65,17 +79,36 @@ class NotchService : LifecycleService() {
     lifecycleScope.launch {
       combine(repo.snapshot, repo.connection) { snapshot, connection -> snapshot to connection }
         .collect { (snapshot, connection) ->
-          val waiting = snapshot?.sessions.orEmpty()
-            .filter { it.status == SessionStatus.NEEDS_INPUT }
-
-          for (session in waiting) {
-            if (announced.add(session.key)) notifyNeedsInput(session.key, session.name, session.project)
+          if (!canPostNotifications(this@NotchService)) {
+            // Permission can be revoked while the activity is away. Stop at
+            // the next stream/connection update instead of retaining a watcher
+            // that is no longer capable of alerting the user.
+            setPrefsWatching(this@NotchService, false)
+            stopSelf()
+            return@collect
           }
-          // Anything no longer waiting can alert again next time it stops.
-          val stillWaiting = waiting.map { it.key }.toSet()
-          val resolved = announced - stillWaiting
-          announced.removeAll(resolved)
-          resolved.forEach { NotificationManagerCompat.from(this@NotchService).cancel(it.hashCode()) }
+          // A retained snapshot is only authoritative while the stream is
+          // online. Reconnect starts from CONNECTING and must wait for a fresh
+          // update before it can alert.
+          val waiting = waitingSessions(snapshot, connection)
+
+          if (connection == Connection.ONLINE) {
+            for (session in waiting) {
+              if (
+                session.key !in announced &&
+                notifyNeedsInput(session.key, session.name, session.project)
+              ) announced.add(session.key)
+            }
+            // Only a fresh online snapshot can prove an earlier alert resolved.
+            // Keeping it through a disconnect also prevents a reconnect from
+            // turning the same unresolved request into a second audible alert.
+            val stillWaiting = waiting.map { it.key }.toSet()
+            val resolved = announced - stillWaiting
+            announced.removeAll(resolved)
+            resolved.forEach {
+              NotificationManagerCompat.from(this@NotchService).cancel(it.hashCode())
+            }
+          }
 
           updateOngoing(snapshot?.computerName, connection, waiting.size)
           // Revocation leaves nothing for a background watcher to do. Staying
@@ -154,13 +187,16 @@ class NotchService : LifecycleService() {
     }
   }
 
-  private fun notifyNeedsInput(key: String, name: String, project: String) {
+  private fun notifyNeedsInput(key: String, name: String, project: String): Boolean {
     val notification = NotificationCompat.Builder(this, CHANNEL_ALERTS)
       .setSmallIcon(R.drawable.ic_notification)
       .setContentTitle("$name needs input")
       .setContentText(project.ifBlank { "Waiting for an answer" })
       .setContentIntent(contentIntent())
       .setAutoCancel(true)
+      // A sticky service may recreate while the same notification id is still
+      // present. Updating it must not buzz the user a second time.
+      .setOnlyAlertOnce(true)
       .setCategory(NotificationCompat.CATEGORY_MESSAGE)
       .setPriority(NotificationCompat.PRIORITY_HIGH)
       .build()
@@ -168,10 +204,11 @@ class NotchService : LifecycleService() {
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
       ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
         PackageManager.PERMISSION_GRANTED
-    ) return
-    runCatching {
+    ) return false
+    return runCatching {
       NotificationManagerCompat.from(this).notify(key.hashCode(), notification)
-    }
+      true
+    }.getOrDefault(false)
   }
 
   companion object {

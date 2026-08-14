@@ -43,6 +43,7 @@ fun SessionScreen(
         .onSuccess { fetched ->
           val grew = fetched.size > messages.size
           messages = fetched
+          error = null
           if (grew && fetched.isNotEmpty()) listState.animateScrollToItem(fetched.lastIndex)
         }
         .onFailure { error = it.message }

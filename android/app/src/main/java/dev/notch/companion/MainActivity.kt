@@ -2,6 +2,7 @@ package dev.notch.companion
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -13,7 +14,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.notch.companion.data.NotchRepository
 import dev.notch.companion.data.SessionSummary
 import dev.notch.companion.service.NotchService
@@ -73,7 +78,36 @@ private fun App(repo: NotchRepository) {
   var screen by remember {
     mutableStateOf<Screen>(if (repo.isPaired()) Screen.Sessions else Screen.Setup)
   }
-  var watching by remember { mutableStateOf(prefsWatching(context)) }
+  var watching by remember {
+    mutableStateOf(prefsWatching(context) && canPostNotifications(context))
+  }
+
+  val lifecycleOwner = LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event != Lifecycle.Event.ON_START) return@LifecycleEventObserver
+      val enabled = prefsWatching(context) && canPostNotifications(context)
+      if (!enabled && prefsWatching(context)) {
+        // Permission can be revoked in system settings while the activity is
+        // stopped. Reconcile the app switch and service on the next foreground.
+        setPrefsWatching(context, false)
+        NotchService.stop(context)
+      }
+      watching = enabled
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
+  LaunchedEffect(Unit) {
+    // Also reconcile immediately in case composition starts after ON_START on
+    // an activity recreation and the observer does not see that first event.
+    if (prefsWatching(context) && !canPostNotifications(context)) {
+      setPrefsWatching(context, false)
+      NotchService.stop(context)
+      watching = false
+    }
+  }
 
   val notificationPermission = rememberLauncherForActivityResult(
     ActivityResultContracts.RequestPermission()
@@ -175,10 +209,15 @@ private fun App(repo: NotchRepository) {
 private const val PREFS = "notch-ui"
 private const val KEY_WATCHING = "watching"
 
-private fun prefsWatching(context: Context): Boolean =
+internal fun prefsWatching(context: Context): Boolean =
   context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_WATCHING, false)
 
-private fun setPrefsWatching(context: Context, value: Boolean) {
+internal fun setPrefsWatching(context: Context, value: Boolean) {
   context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     .edit().putBoolean(KEY_WATCHING, value).apply()
 }
+
+internal fun canPostNotifications(context: Context): Boolean =
+  Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+      PackageManager.PERMISSION_GRANTED

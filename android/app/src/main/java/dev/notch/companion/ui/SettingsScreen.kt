@@ -23,6 +23,7 @@ fun SettingsScreen(
 ) {
   val scope = rememberCoroutineScope()
   var busy by remember { mutableStateOf(false) }
+  var forgetError by remember { mutableStateOf<String?>(null) }
 
   Scaffold(
     topBar = {
@@ -83,14 +84,24 @@ fun SettingsScreen(
         enabled = !busy,
         onClick = {
           busy = true
+          forgetError = null
           scope.launch {
-            runCatching { repo.forget() }
+            val result = runCatching { repo.forget() }
             busy = false
-            onForgotten()
+            result.onSuccess { onForgotten() }
+              .onFailure { forgetError = it.message ?: "Could not unpair this phone." }
           }
         },
         modifier = Modifier.fillMaxWidth()
       ) { Text("Unpair this phone") }
+
+      forgetError?.let {
+        Text(
+          it,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.error
+        )
+      }
 
       Text(
         "Unpairing also tells the computer to forget this device. You can revoke it from " +

@@ -15,6 +15,8 @@ import java.util.concurrent.TimeUnit
 /** A bridge error carrying the HTTP status, so callers can react to 401 vs 409. */
 class BridgeException(val status: Int, message: String) : IOException(message)
 
+internal fun remotePairingIsAlreadyGone(status: Int): Boolean = status == 401
+
 /** Plain HTTP is restricted to local/private address space. */
 internal fun isPrivateBridgeHost(host: String): Boolean {
   if (host.equals("localhost", ignoreCase = true) || host == "::1") return true
@@ -113,7 +115,17 @@ class NotchClient(private val store: NotchStore) {
   // --- paired --------------------------------------------------------------
 
   suspend fun unpair() {
-    runCatching { call(request("/pair").delete().build()) }
+    // Keep the credential if desktop revocation fails. It is the only token
+    // that can retry the device-specific DELETE, and the UI promises that
+    // unpairing removes this phone from the computer as well as locally.
+    try {
+      call(request("/pair").delete().build())
+    } catch (failure: BridgeException) {
+      // A 401 means the desktop already removed or expired this device, so
+      // there is nothing remote left to retry. Network and server failures keep
+      // the credential so the same DELETE can be attempted again.
+      if (!remotePairingIsAlreadyGone(failure.status)) throw failure
+    }
     store.clearPairing()
   }
 
