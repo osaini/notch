@@ -137,6 +137,12 @@ export function App(): React.JSX.Element {
   const statusFlashSequenceRef = useRef(0)
 
   useEffect(() => {
+    let live = true
+    let sessionsPushed = false
+    let usagePushed = false
+    let interactionsPushed = false
+    let settingsPushed = false
+    let dragPushed = false
     const acceptSessions = (next: SessionsSnapshot): void => {
       setSnapshot(next)
       setSessionsReady(true)
@@ -145,25 +151,53 @@ export function App(): React.JSX.Element {
       setInteractions(next)
       setInteractionsReady(true)
     }
-    const unsubSessions = window.notch.onSessions(acceptSessions)
-    const unsubUsage = window.notch.onUsage(setUsage)
-    const unsubInteractions = window.notch.onInteractions(acceptInteractions)
-    const unsubSettings = window.notch.onSettings(setSettings)
+    const unsubSessions = window.notch.onSessions((next) => {
+      sessionsPushed = true
+      acceptSessions(next)
+    })
+    const unsubUsage = window.notch.onUsage((next) => {
+      usagePushed = true
+      setUsage(next)
+    })
+    const unsubInteractions = window.notch.onInteractions((next) => {
+      interactionsPushed = true
+      acceptInteractions(next)
+    })
+    const unsubSettings = window.notch.onSettings((next) => {
+      settingsPushed = true
+      setSettings(next)
+    })
     // Kept after the gesture ends too: the main process is the authority on
     // which edge the window is actually parked against, and its final message
     // carries a zeroed offset, so this stays correct at rest.
-    const unsubDrag = window.notch.onDragState(setDrag)
+    const unsubDrag = window.notch.onDragState((next) => {
+      dragPushed = true
+      setDrag(next)
+    })
     const unsubExpand = window.notch.onForceExpand(() => setExpanded(true))
     const unsubCollapse = window.notch.onForceCollapse(() => {
       setExpanded(false)
     })
-    void window.notch.getDragState().then(setDrag)
-    void window.notch.getSessions().then(acceptSessions)
-    void window.notch.getUsage().then(setUsage)
-    void window.notch.getInteractions().then(acceptInteractions)
-    void window.notch.getSettings().then(setSettings)
-    void window.notch.getHookStatus().then(setHooks)
+    void window.notch.getDragState().then((next) => {
+      if (live && !dragPushed) setDrag(next)
+    }).catch((error: unknown) => console.error('[renderer] drag initialization failed:', error))
+    void window.notch.getSessions().then((next) => {
+      if (live && !sessionsPushed) acceptSessions(next)
+    }).catch((error: unknown) => console.error('[renderer] session initialization failed:', error))
+    void window.notch.getUsage().then((next) => {
+      if (live && !usagePushed) setUsage(next)
+    }).catch((error: unknown) => console.error('[renderer] usage initialization failed:', error))
+    void window.notch.getInteractions().then((next) => {
+      if (live && !interactionsPushed) acceptInteractions(next)
+    }).catch((error: unknown) => console.error('[renderer] interaction initialization failed:', error))
+    void window.notch.getSettings().then((next) => {
+      if (live && !settingsPushed) setSettings(next)
+    }).catch((error: unknown) => console.error('[renderer] settings initialization failed:', error))
+    void window.notch.getHookStatus().then((next) => {
+      if (live) setHooks(next)
+    }).catch((error: unknown) => console.error('[renderer] hook initialization failed:', error))
     return () => {
+      live = false
       unsubSessions(); unsubUsage(); unsubInteractions(); unsubSettings(); unsubDrag(); unsubExpand(); unsubCollapse()
     }
   }, [])
