@@ -430,7 +430,7 @@ export class MobileBridge extends EventEmitter {
         this.options.watcher.on('update', this.watcherListener)
         this.heartbeat = setInterval(() => {
           this.pruneUnauthorizedClients()
-          for (const client of this.clients.keys()) client.write(': heartbeat\n\n')
+          this.writeToClients(': heartbeat\n\n')
         }, HEARTBEAT_MS)
         // Before the first status goes out, so the Settings tab never shows an
         // unranked list on the one render the user is most likely to act on.
@@ -983,7 +983,9 @@ export class MobileBridge extends EventEmitter {
     // while getProjects() is pending must see this client and queue a successor
     // snapshot instead of disappearing permanently.
     this.clients.set(res, { deviceId: device.id, pairedAt: device.pairedAt })
-    req.on('close', () => this.clients.delete(res))
+    const remove = (): void => { this.clients.delete(res) }
+    req.on('close', remove)
+    res.on('error', remove)
     await this.queueBroadcast()
   }
 
@@ -1007,7 +1009,24 @@ export class MobileBridge extends EventEmitter {
     this.pruneUnauthorizedClients()
     if (!this.clients.size) return
     const payload = `event: snapshot\ndata: ${JSON.stringify(await this.snapshot())}\n\n`
-    for (const client of this.clients.keys()) client.write(payload)
+    this.writeToClients(payload)
+  }
+
+  /**
+   * An SSE client that stops reading must not make the desktop buffer updates
+   * without bound. Dropping that one connection is safe: both companions
+   * reconnect automatically and receive a fresh snapshot.
+   */
+  private writeToClients(payload: string): void {
+    for (const response of this.clients.keys()) {
+      try {
+        if (!response.destroyed && !response.writableEnded && response.write(payload)) continue
+      } catch {
+        // Treat a synchronous socket failure exactly like backpressure.
+      }
+      this.clients.delete(response)
+      response.destroy()
+    }
   }
 
   private closeClients(predicate: (client: { deviceId: string; pairedAt: number }) => boolean): void {
