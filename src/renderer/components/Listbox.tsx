@@ -138,6 +138,7 @@ export function Listbox({
                 void Promise.resolve()
                   .then(onBrowse)
                   .finally(() => triggerRef.current?.focus())
+                  .catch(() => undefined)
               }}
             >
               <span>+</span>{browsing ? 'Opening…' : 'Browse for a folder…'}
