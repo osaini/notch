@@ -23,7 +23,7 @@ import type {
   UsageSnapshot
 } from '@shared/types'
 import { SessionWatcher } from './sessionWatcher'
-import { HookServer, DEFAULT_PORT, HOOK_EVENTS, compareInteractions } from './hookServer'
+import { HookServer, DEFAULT_PORT, compareInteractions } from './hookServer'
 import {
   SETTINGS_PATH,
   getHookStatus,
@@ -66,12 +66,21 @@ let quitting = false
  * already been sent — there is nothing to answer, only somewhere to go.
  */
 const followUps = new Map<string, PendingInteraction>()
+const followUpGenerations = new Map<string, number>()
+const followUpReads = new Map<string, number>()
+
+function releaseFollowUpGeneration(sessionId: string): void {
+  if ((followUpReads.get(sessionId) ?? 0) === 0 && !followUps.has(sessionId)) {
+    followUpGenerations.delete(sessionId)
+  }
+}
 
 function getPendingInteractions(): PendingInteraction[] {
   const managed = managedCodex.getPendingInteractions()
+  const managedSessionIds = new Set(managed.map((interaction) => interaction.sessionId))
   const external = watcher
     .getPendingInteractions()
-    .filter((interaction) => !managedCodex.ownsSession(interaction.sessionId))
+    .filter((interaction) => !managedSessionIds.has(interaction.sessionId))
   // A real prompt for the same session always supersedes its follow-up card.
   const held = [...hookServer.getPendingInteractions(), ...managed, ...external]
   const blocked = new Set(held.map((interaction) => interaction.sessionId))
@@ -82,7 +91,9 @@ function getPendingInteractions(): PendingInteraction[] {
 }
 
 function clearFollowUp(sessionId: string): void {
+  followUpGenerations.set(sessionId, (followUpGenerations.get(sessionId) ?? 0) + 1)
   if (followUps.delete(sessionId)) pushInteractions()
+  releaseFollowUpGeneration(sessionId)
 }
 
 function pruneFollowUps(snapshot: SessionsSnapshot): void {
@@ -95,8 +106,15 @@ function pruneFollowUps(snapshot: SessionsSnapshot): void {
       .map((session) => session.sessionId)
   )
   let changed = false
-  for (const sessionId of followUps.keys()) {
-    if (!liveClaudeIds.has(sessionId)) changed = followUps.delete(sessionId) || changed
+  const trackedSessionIds = new Set([...followUps.keys(), ...followUpReads.keys()])
+  for (const sessionId of trackedSessionIds) {
+    if (liveClaudeIds.has(sessionId)) continue
+    // Invalidate an in-flight transcript read as well as deleting an existing
+    // card. Otherwise a slow Stop read can resurrect a prompt after its session
+    // disappeared from an authoritative watcher snapshot.
+    followUpGenerations.set(sessionId, (followUpGenerations.get(sessionId) ?? 0) + 1)
+    changed = followUps.delete(sessionId) || changed
+    releaseFollowUpGeneration(sessionId)
   }
   if (changed) pushInteractions()
 }
@@ -104,9 +122,24 @@ function pruneFollowUps(snapshot: SessionsSnapshot): void {
 async function captureFollowUp(event: HookEvent): Promise<void> {
   const sessionId = event.session_id
   if (!sessionId || !event.transcript_path) return
-  const question = await readTrailingQuestion(event.transcript_path)
+  const generation = (followUpGenerations.get(sessionId) ?? 0) + 1
+  followUpGenerations.set(sessionId, generation)
+  followUpReads.set(sessionId, (followUpReads.get(sessionId) ?? 0) + 1)
+  let question: string | null
+  try {
+    question = await readTrailingQuestion(event.transcript_path)
+  } finally {
+    const remaining = (followUpReads.get(sessionId) ?? 1) - 1
+    if (remaining > 0) followUpReads.set(sessionId, remaining)
+    else followUpReads.delete(sessionId)
+  }
+  if (followUpGenerations.get(sessionId) !== generation) {
+    releaseFollowUpGeneration(sessionId)
+    return
+  }
   if (!question) {
-    clearFollowUp(sessionId)
+    if (followUps.delete(sessionId)) pushInteractions()
+    releaseFollowUpGeneration(sessionId)
     return
   }
   const receivedAt = Date.now()
@@ -327,10 +360,24 @@ async function toggleHooks(): Promise<HookInstallStatus> {
   const current = await getHookStatus()
   const next = current.installed
     ? await uninstallHooks()
-    : await installHooks(hookServer.port ?? DEFAULT_PORT, hookServer.authToken)
+    : await installRunningHooks(current)
   hookStatus = next
   tray?.setHooksInstalled(next.installed)
   return next
+}
+
+async function installRunningHooks(
+  current?: HookInstallStatus
+): Promise<HookInstallStatus> {
+  const status = current ?? await getHookStatus()
+  const port = hookServer.port
+  if (port === null) {
+    return {
+      ...status,
+      error: 'The local hook listener is unavailable. Restart Notch before installing hooks.'
+    }
+  }
+  return installHooks(port, hookServer.authToken)
 }
 
 function registerIpc(): void {
@@ -383,7 +430,7 @@ function registerIpc(): void {
     return hookStatus
   })
   ipcMain.handle('notch:installHooks', async () => {
-    hookStatus = await installHooks(hookServer.port ?? DEFAULT_PORT, hookServer.authToken)
+    hookStatus = await installRunningHooks()
     tray?.setHooksInstalled(hookStatus.installed)
     return hookStatus
   })
@@ -664,7 +711,7 @@ app.whenReady().then(async () => {
     if (
       hookStatus.installed &&
       (hookStatus.port !== port ||
-        !HOOK_EVENTS.every((event) => hookStatus!.events.includes(event)) ||
+        !hookStatus.complete ||
         installedToken !== hookServer.authToken ||
         // A pre-rename marker is still recognised as ours, so `installed` is
         // true and nothing above would fire. Without this clause the old marker
@@ -676,6 +723,9 @@ app.whenReady().then(async () => {
     tray.setHooksInstalled(hookStatus.installed)
   } catch (err) {
     console.error('[hook server] failed to start:', (err as Error).message)
+    const current = await getHookStatus()
+    hookStatus = { ...current, error: `The local hook listener failed to start: ${(err as Error).message}` }
+    tray.setHooksInstalled(current.installed)
   }
 
   setInterval(() => watcher.expireNeedsInput(NEEDS_INPUT_TTL_MS), NEEDS_INPUT_SWEEP_MS)

@@ -258,6 +258,10 @@ export class NotchWindow {
       this.drag = null
       this.sentDragState = null
       this.stopMotion()
+      // The replacement renderer starts collapsed and therefore never sends a
+      // false transition of its own. Restore click-through here so a reload of
+      // an expanded transparent window cannot block the desktop underneath.
+      this.setInteractive(false)
       this.reposition(false)
     })
 

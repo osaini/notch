@@ -388,6 +388,8 @@ export interface SessionActionResult {
 
 export interface HookInstallStatus {
   installed: boolean
+  /** True only when every current hook specification is present exactly once. */
+  complete: boolean
   /** Port the local hook listener is actually bound to. */
   port: number | null
   /** Hook events currently pointed at us. */

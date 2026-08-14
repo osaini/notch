@@ -308,15 +308,27 @@ export function InteractionTakeover({
         )
       : {}
 
-  const next = (): void => {
+  const next = async (): Promise<void> => {
     if (!current || !valid) {
       setMessage('Choose an option or enter an answer to continue.')
       return
     }
     setMessage(null)
-    // Each answered question buys a fresh budget for the next one.
-    void window.notch.advanceInteraction(interaction.id)
-    setStep((value) => value + 1)
+    setAnswering(true)
+    try {
+      // Only held hooks have a deadline to extend. If the interaction expired
+      // while this answer was being entered, do not advance into a dead card.
+      if (interaction.expiresAt) {
+        const advanced = await window.notch.advanceInteraction(interaction.id)
+        if (!advanced) {
+          setMessage('That question already expired.')
+          return
+        }
+      }
+      setStep((value) => value + 1)
+    } finally {
+      setAnswering(false)
+    }
   }
 
   const submit = async (): Promise<void> => {

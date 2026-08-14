@@ -268,6 +268,9 @@ test('the report includes failed jobs, rejected findings, and baseline status', 
     ],
     baseline: {
       checks: [
+        { name: 'resolve node', status: 'pass', exitCode: null }
+      ],
+      baseline: [
         { name: 'typecheck', status: 'succeeded', exitCode: 0 },
         { name: 'verify', status: 'failed', exitCode: 1 }
       ]
@@ -297,6 +300,8 @@ test('the report includes failed jobs, rejected findings, and baseline status', 
   assert.ok(markdown.includes('Focus handler drops the second event'), 'rejected finding must stay auditable');
   assert.ok(markdown.includes('focus.ts:88 already re-arms the handler'));
   assert.ok(markdown.includes('1 baseline check(s) were already failing'));
+  assert.ok(markdown.includes('| typecheck | succeeded | 0 |'));
+  assert.ok(!markdown.includes('| resolve node |'), 'tool-resolution checks are not the deterministic baseline');
   assert.ok(markdown.includes('codex CLI does not support --strict-config'));
   assert.ok(markdown.includes('Possible duplicate groups'));
 

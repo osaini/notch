@@ -104,6 +104,7 @@ async function main(): Promise<void> {
 
   const before = await getHookStatus()
   assert.equal(before.installed, true, 'a legacy install must still be recognised as ours')
+  assert.equal(before.complete, false, 'legacy entries require a current-spec repair')
   assert.equal(before.hasLegacyMarker, true, 'the legacy marker must be reported')
   assert.equal(before.port, 47821, 'the port must still be readable from a legacy URL')
   assert.equal(before.backupPath, legacyBackupPath, 'a legacy backup must be reported as the backup')
@@ -135,7 +136,18 @@ async function main(): Promise<void> {
   pass('no event gained a duplicate entry')
 
   assert.equal((await getHookStatus()).hasLegacyMarker, false)
+  assert.equal((await getHookStatus()).complete, true)
   pass('hasLegacyMarker clears, so startup stops reinstalling on every launch')
+
+  const partial = readSettings()
+  partial.hooks.Notification = partial.hooks.Notification.slice(1)
+  fs.writeFileSync(settingsPath, `${JSON.stringify(partial, null, 2)}\n`, 'utf8')
+  const partialStatus = await getHookStatus()
+  assert.equal(partialStatus.installed, true)
+  assert.equal(partialStatus.complete, false)
+  await installHooks(47821, TOKEN)
+  assert.equal((await getHookStatus()).complete, true)
+  pass('a missing Notification specification is detected and repairable')
 
   assert.deepEqual(
     migrated.hooks.PreToolUse.find((group) => (group as { matcher?: string }).matcher === 'Bash'),
@@ -179,6 +191,33 @@ async function main(): Promise<void> {
   assert.deepEqual(markers(), { current: 0, legacy: 0 }, 'a pure legacy install must be removable')
   assert.deepEqual(readSettings().hooks, { PreToolUse: [USER_HOOK, FOREIGN_HOOK] })
   pass('a 0.1.x install can be uninstalled without an install migrating it first')
+
+  const emptyOnly = '{"hooks":{"PreCompact":[]}}\n'
+  fs.writeFileSync(settingsPath, emptyOnly, 'utf8')
+  await uninstallHooks()
+  assert.equal(fs.readFileSync(settingsPath, 'utf8'), emptyOnly)
+  pass('uninstall is a byte-for-byte no-op for a user-owned empty event array')
+
+  const malformed = '{"hooks":{"Stop":{"legacy":true}}}\n'
+  fs.writeFileSync(settingsPath, malformed, 'utf8')
+  const refused = await installHooks(47821, TOKEN)
+  assert.match(refused.error ?? '', /hooks\.Stop must be an array/)
+  assert.equal(fs.readFileSync(settingsPath, 'utf8'), malformed)
+  pass('install refuses a malformed managed event without overwriting it')
+
+  const exactForeign = {
+    hooks: {
+      PreToolUse: [{
+        matcher: 'Foreign',
+        hooks: [{ type: 'http', url: 'https://example.test/callback?app=notch&token=foreign' }]
+      }]
+    }
+  }
+  fs.writeFileSync(settingsPath, `${JSON.stringify(exactForeign, null, 2)}\n`, 'utf8')
+  await installHooks(47821, TOKEN)
+  await uninstallHooks()
+  assert.deepEqual(readSettings(), exactForeign)
+  pass('an external hook carrying app=notch is never classified as ours')
 
   console.log('\nHook migration tests passed.')
 }

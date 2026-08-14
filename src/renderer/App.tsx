@@ -217,6 +217,12 @@ export function App(): React.JSX.Element {
   }, [dismissedInteraction, interactions])
 
   useEffect(() => {
+    if (!dismissedInteraction || activeId !== dismissedInteraction) return
+    const next = interactions.find((interaction) => interaction.id !== dismissedInteraction)
+    if (next) setActiveId(next.id)
+  }, [activeId, dismissedInteraction, interactions])
+
+  useEffect(() => {
     if (!confirmation) return
     const timer = window.setTimeout(() => setConfirmation(null), 850)
     return () => window.clearTimeout(timer)
@@ -545,7 +551,15 @@ export function App(): React.JSX.Element {
                     <Dispatch
                       attachments={attachments}
                       usage={usage}
-                      onClearAttachments={() => setAttachments([])}
+                      onClearAttachments={(sent) => setAttachments((current) => {
+                        if (!sent) return []
+                        const remaining = [...current]
+                        for (const item of sent) {
+                          const index = remaining.indexOf(item)
+                          if (index >= 0) remaining.splice(index, 1)
+                        }
+                        return remaining
+                      })}
                     />
                   )}
                   {tab === 'tray' && (

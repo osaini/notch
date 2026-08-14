@@ -15,6 +15,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.notch.companion.data.Message
 import dev.notch.companion.data.NotchRepository
+import dev.notch.companion.data.SessionStatus
 import dev.notch.companion.data.SessionSummary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -32,6 +33,7 @@ fun SessionScreen(
   var sending by remember { mutableStateOf(false) }
   var error by remember { mutableStateOf<String?>(null) }
   val listState = rememberLazyListState()
+  val canSend = session.canMessage && session.status == SessionStatus.IDLE
 
   // The transcript has no push channel of its own — the SSE stream carries
   // session status, not message bodies — so this polls while the screen is up.
@@ -85,14 +87,18 @@ fun SessionScreen(
             onValueChange = { draft = it },
             modifier = Modifier.weight(1f),
             placeholder = {
-              Text(if (session.canMessage) "Send a follow-up" else "This session is read-only")
+              Text(
+                if (canSend) "Send a follow-up"
+                else if (!session.canMessage) "This session is read-only"
+                else "Wait until the agent is idle"
+              )
             },
-            enabled = session.canMessage && !sending,
+            enabled = canSend && !sending,
             maxLines = 4
           )
           Spacer(Modifier.width(8.dp))
           Button(
-            enabled = session.canMessage && !sending && draft.isNotBlank(),
+            enabled = canSend && !sending && draft.isNotBlank(),
             onClick = {
               val text = draft.trim()
               sending = true

@@ -179,13 +179,22 @@ export function renderReport({
   if (!baseline) {
     out.push(`_No baseline recorded for this run. Run \`${invocation('preflight')}\` to capture one._`);
   } else {
+    // A persisted preflight snapshot contains tool-resolution checks under
+    // `checks` and the repository's deterministic commands under `baseline`.
+    // Reports are about the latter. Older test fixtures/run files stored those
+    // commands directly in `checks`, so retain that fallback.
+    const baselineChecks = Array.isArray(baseline.baseline)
+      ? baseline.baseline
+      : (baseline.checks ?? []);
     out.push('| Check | Result | Exit code |');
     out.push('| --- | --- | --- |');
-    for (const check of baseline.checks ?? []) {
+    for (const check of baselineChecks) {
       out.push(`| ${escapeCell(check.name)} | ${check.status} | ${check.exitCode ?? '—'} |`);
     }
     out.push('');
-    const failing = (baseline.checks ?? []).filter((check) => check.status !== 'succeeded');
+    const failing = baselineChecks.filter(
+      (check) => check.status !== 'succeeded' && check.status !== 'pass'
+    );
     out.push(
       failing.length
         ? `**${failing.length} baseline check(s) were already failing before any model call.** Pre-existing failures are not model-discovered bugs.`

@@ -178,6 +178,8 @@ interface MobileBridgeOptions {
   dispatch: (request: DispatchRequest) => Promise<DispatchResult>
   /** Injectable so credential-expiry behavior can be tested without waiting. */
   now?: () => number
+  /** Injectable so follow-up launch races can be covered without starting an agent. */
+  spawnProcess?: typeof spawn
 }
 
 class HttpError extends Error {
@@ -391,6 +393,8 @@ export class MobileBridge extends EventEmitter {
   private readonly dispatchWork = new Map<string, Promise<void>>()
   private lastError: string | undefined
   private broadcastQueued = false
+  /** Serializes snapshot generation and writes so an older async snapshot cannot overtake a newer one. */
+  private broadcastWork: Promise<void> = Promise.resolve()
   private watcherListener: (() => void) | null = null
   /** Cached result of the last routing probe. See probePreferredAddress(). */
   private preferredAddress: string | null = null
@@ -842,7 +846,18 @@ export class MobileBridge extends EventEmitter {
             '--json'
           ]
 
-    await this.spawnFollowup(session.agent, args, session.cwd, key)
+    // Reserve the session before spawning. `spawn` does not report success until
+    // a later event, and two paired phones can otherwise both pass the idle
+    // check during that gap and resume the same conversation concurrently.
+    this.runningSessions.add(key)
+    void this.queueBroadcast()
+    try {
+      await this.spawnFollowup(session.agent, args, session.cwd, key)
+    } catch (error) {
+      this.runningSessions.delete(key)
+      void this.queueBroadcast()
+      throw error
+    }
     return {
       id: randomUUID(),
       role: 'user',
@@ -858,20 +873,18 @@ export class MobileBridge extends EventEmitter {
     key: string
   ): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(agent, args, {
+      const child = (this.options.spawnProcess ?? spawn)(agent, args, {
         cwd,
         windowsHide: true,
         stdio: 'ignore'
       })
       child.once('error', reject)
       child.once('spawn', () => {
-        this.runningSessions.add(key)
-        this.queueBroadcast()
         resolve()
       })
       child.once('exit', () => {
         this.runningSessions.delete(key)
-        this.queueBroadcast()
+        void this.queueBroadcast()
       })
     })
   }
@@ -958,22 +971,27 @@ export class MobileBridge extends EventEmitter {
       'cache-control': 'no-cache, no-transform',
       connection: 'keep-alive'
     })
-    res.write(`event: snapshot\ndata: ${JSON.stringify(await this.snapshot())}\n\n`)
+    // Register before the first async snapshot begins. An update that arrives
+    // while getProjects() is pending must see this client and queue a successor
+    // snapshot instead of disappearing permanently.
     this.clients.set(res, { deviceId: device.id, pairedAt: device.pairedAt })
     req.on('close', () => this.clients.delete(res))
+    await this.queueBroadcast()
   }
 
-  private queueBroadcast(): void {
-    if (this.broadcastQueued) return
+  private queueBroadcast(): Promise<void> {
+    if (this.broadcastQueued) return this.broadcastWork
     this.broadcastQueued = true
-    queueMicrotask(() => {
+    const run = this.broadcastWork.then(async () => {
       this.broadcastQueued = false
-      void this.broadcastSnapshot().catch((error) => {
-        // A transient project-list or watcher failure must not become an
-        // unhandled rejection in Electron's main process.
-        console.error('[mobile bridge] snapshot broadcast failed:', (error as Error).message)
-      })
+      await this.broadcastSnapshot()
     })
+    // Keep the serialization chain usable after a transient failure, and make
+    // fire-and-forget watcher calls safe from unhandled rejections.
+    this.broadcastWork = run.catch((error) => {
+      console.error('[mobile bridge] snapshot broadcast failed:', (error as Error).message)
+    })
+    return this.broadcastWork
   }
 
   private async broadcastSnapshot(): Promise<void> {
@@ -1071,17 +1089,20 @@ export class MobileBridge extends EventEmitter {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = []
       let size = 0
+      let tooLarge = false
       req.on('data', (chunk: Buffer) => {
+        if (tooLarge) return
         size += chunk.length
         if (size > MAX_BODY_BYTES) {
+          tooLarge = true
           reject(new HttpError(413, 'Request body is too large.'))
-          req.destroy()
           return
         }
         chunks.push(chunk)
       })
       req.on('error', reject)
       req.on('end', () => {
+        if (tooLarge) return
         try {
           const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
           resolve(isRecord(parsed) ? parsed : {})

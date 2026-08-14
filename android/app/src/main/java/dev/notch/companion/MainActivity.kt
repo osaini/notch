@@ -158,10 +158,14 @@ private fun App(repo: NotchRepository) {
       // Re-read the session from the live snapshot so its status keeps updating
       // while the transcript is open.
       val live = snapshot?.sessions?.firstOrNull { it.key == current.session.key }
-        ?: current.session
+      LaunchedEffect(snapshot, current.session.key) {
+        if (snapshot != null && live == null) screen = Screen.Sessions
+      }
       SessionScreen(
         repo = repo,
-        session = live,
+        // Keep the title stable during the initial reconnect only. Once an
+        // authoritative snapshot omits the session, the effect above closes it.
+        session = live ?: current.session,
         onBack = { screen = Screen.Sessions }
       )
     }

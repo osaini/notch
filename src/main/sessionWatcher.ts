@@ -700,7 +700,9 @@ export class SessionWatcher extends EventEmitter {
     if (isPidAlive(session.pid)) {
       return { ok: false, message: 'The process is still running.' }
     }
-    this.suppressed.add(key)
+    // The dead PID is already pruned by scanOnce. Suppressing the stable
+    // conversation key would also hide a later `claude --resume` process that
+    // legitimately reuses the same session id.
     void this.scan()
     return { ok: true, message: 'Session ended and hidden. Its transcript was preserved.' }
   }

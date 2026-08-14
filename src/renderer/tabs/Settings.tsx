@@ -53,6 +53,7 @@ export function Settings({
   const [displays, setDisplays] = useState<DisplayOption[]>([])
   const [saving, setSaving] = useState(false)
   const [mobile, setMobile] = useState<MobileBridgeStatus | null>(null)
+  const [pairingClock, setPairingClock] = useState(Date.now())
   /** Which endpoint the QR encodes. Null follows the bridge's recommendation. */
   const [chosenUrl, setChosenUrl] = useState<string | null>(null)
 
@@ -64,6 +65,12 @@ export function Settings({
     // that has already stopped working.
     return window.notch.onMobileStatus(setMobile)
   }, [])
+
+  useEffect(() => {
+    if (!mobile?.pairingCode || mobile.pairingExpiresAt <= Date.now()) return
+    const timer = window.setInterval(() => setPairingClock(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [mobile?.pairingCode, mobile?.pairingExpiresAt])
 
   const endpoints = mobile?.endpoints ?? []
   const selected: MobileEndpoint | undefined =
@@ -77,7 +84,7 @@ export function Settings({
    * so this exposes the code nowhere the displayed digits had not already.
    */
   const pairingLink =
-    selected && mobile?.pairingCode && mobile.pairingExpiresAt > Date.now()
+    selected && mobile?.pairingCode && mobile.pairingExpiresAt > pairingClock
       ? `${selected.url}/#pair=${mobile.pairingCode}`
       : (selected?.url ?? '')
 

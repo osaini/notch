@@ -24,7 +24,7 @@ const CLAUDE_CONFIG_PATH = process.env.CLAUDE_CONFIG_DIR
 const CLAUDE_CREDENTIALS_PATH = path.join(CLAUDE_CONFIG_DIR, '.credentials.json')
 const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 
-const CACHE_VERSION = 3
+const CACHE_VERSION = 4
 const CHUNK_BYTES = 4 * 1024 * 1024
 export const BLOCK_MS = 5 * 60 * 60 * 1000
 const EVENT_RETENTION_MS = 6 * 60 * 60 * 1000
@@ -87,9 +87,28 @@ interface FileAggregate {
 
 interface UsageCache {
   version: number
+  timeZone: string
   files: Record<string, FileAggregate>
   /** Last usable provider responses survive app restarts and transient outages. */
   providerPlans?: Partial<Record<AgentKind, PlanUsage>>
+}
+
+interface TranscriptListing {
+  files: string[]
+  failedDirectories: string[]
+}
+
+type TranscriptReaddir = (directory: string) => Promise<import('node:fs').Dirent[]>
+
+const readTranscriptDirectory: TranscriptReaddir = (directory) =>
+  fsp.readdir(directory, { withFileTypes: true })
+
+function currentTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'
+}
+
+function emptyUsageCache(): UsageCache {
+  return { version: CACHE_VERSION, timeZone: currentTimeZone(), files: {} }
 }
 
 function emptyAggregate(agent: AgentKind): FileAggregate {
@@ -138,17 +157,29 @@ function timestamp(value: unknown, fallback = Date.now()): number {
   return fallback
 }
 
-async function listTranscripts(dir: string): Promise<string[]> {
+async function listTranscripts(
+  dir: string,
+  failedDirectories: string[],
+  readDirectory: TranscriptReaddir
+): Promise<string[]> {
   const output: string[] = []
   let entries: import('node:fs').Dirent[]
   try {
-    entries = await fsp.readdir(dir, { withFileTypes: true })
-  } catch {
+    entries = await readDirectory(dir)
+  } catch (error) {
+    // A missing directory is an authoritative empty result. Other failures
+    // (sharing violations, permissions, transient I/O) must not make the next
+    // cleanup pass erase cached usage for files we could not inspect.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      failedDirectories.push(path.resolve(dir))
+    }
     return output
   }
   for (const entry of entries) {
     const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) output.push(...(await listTranscripts(full)))
+    if (entry.isDirectory()) {
+      output.push(...(await listTranscripts(full, failedDirectories, readDirectory)))
+    }
     else if (entry.isFile() && entry.name.endsWith('.jsonl')) output.push(full)
   }
   return output
@@ -161,7 +192,17 @@ async function listTranscripts(dir: string): Promise<string[]> {
  * the live copy is preferred over an archived or compatibility copy.
  */
 export async function listUniqueTranscripts(roots: readonly string[]): Promise<string[]> {
-  const groups = await Promise.all(roots.map(listTranscripts))
+  return (await listUniqueTranscriptsWithStatus(roots)).files
+}
+
+export async function listUniqueTranscriptsWithStatus(
+  roots: readonly string[],
+  readDirectory: TranscriptReaddir = readTranscriptDirectory
+): Promise<TranscriptListing> {
+  const failedDirectories: string[] = []
+  const groups = await Promise.all(
+    roots.map((root) => listTranscripts(root, failedDirectories, readDirectory))
+  )
   const unique = new Map<string, string>()
   for (const files of groups) {
     for (const file of files) {
@@ -169,7 +210,12 @@ export async function listUniqueTranscripts(roots: readonly string[]): Promise<s
       if (!unique.has(identity)) unique.set(identity, file)
     }
   }
-  return [...unique.values()]
+  return { files: [...unique.values()], failedDirectories }
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 function addUsage(
@@ -761,7 +807,7 @@ export async function fetchCodexPlanUsage(
 
 export class UsageScanner extends EventEmitter {
   private readonly cachePath: string
-  private cache: UsageCache = { version: CACHE_VERSION, files: {} }
+  private cache: UsageCache = emptyUsageCache()
   private snapshot: UsageSnapshot = emptySnapshot(true)
   private timer: NodeJS.Timeout | null = null
   private scanPromise: Promise<UsageSnapshot> | null = null
@@ -807,7 +853,11 @@ export class UsageScanner extends EventEmitter {
   private async loadCache(): Promise<void> {
     try {
       const parsed = JSON.parse(await fsp.readFile(this.cachePath, 'utf8')) as UsageCache
-      if (parsed?.version !== CACHE_VERSION || !parsed.files) throw new Error('old cache')
+      if (
+        parsed?.version !== CACHE_VERSION ||
+        parsed.timeZone !== currentTimeZone() ||
+        !parsed.files
+      ) throw new Error('old cache')
       this.cache = parsed
       for (const aggregate of Object.values(this.cache.files)) {
         if (!Array.isArray(aggregate.hours) || aggregate.hours.length !== 24) {
@@ -828,7 +878,7 @@ export class UsageScanner extends EventEmitter {
         }
       }
     } catch {
-      this.cache = { version: CACHE_VERSION, files: {} }
+      this.cache = emptyUsageCache()
     }
   }
 
@@ -855,21 +905,41 @@ export class UsageScanner extends EventEmitter {
   private async scanOnce(forcePlanFetch = false): Promise<UsageSnapshot> {
     this.lastPassBytes = 0
     try {
-      const [claudeFiles, codexFiles, claudeCached] = await Promise.all([
-        listUniqueTranscripts(CLAUDE_USAGE_DIRS),
-        listUniqueTranscripts(CODEX_USAGE_DIRS),
+      const [claudeListing, codexListing, claudeCached] = await Promise.all([
+        listUniqueTranscriptsWithStatus(CLAUDE_USAGE_DIRS),
+        listUniqueTranscriptsWithStatus(CODEX_USAGE_DIRS),
         readClaudeCachedPlanUsage()
       ])
+      const failedDirectories = [
+        ...claudeListing.failedDirectories,
+        ...codexListing.failedDirectories
+      ]
       const sources = new Map<string, AgentKind>()
-      for (const file of claudeFiles) sources.set(file, 'claude')
-      for (const file of codexFiles) sources.set(file, 'codex')
+      const addSources = (files: string[], agent: AgentKind): void => {
+        for (const file of files) {
+          // If the preferred copy was inside a directory that failed this pass,
+          // do not also count an archive/mirror copy with the same session id.
+          // Keep the cached preferred aggregate until that directory recovers.
+          const retained = Object.entries(this.cache.files).find(([known, aggregate]) =>
+            aggregate.agent === agent &&
+            path.basename(known).toLowerCase() === path.basename(file).toLowerCase() &&
+            failedDirectories.some((directory) => isWithin(directory, known))
+          )?.[0]
+          sources.set(retained ?? file, agent)
+        }
+      }
+      addSources(claudeListing.files, 'claude')
+      addSources(codexListing.files, 'codex')
 
       for (const [file, agent] of sources) {
         await this.scanFile(file, agent)
         await new Promise<void>((resolve) => setImmediate(resolve))
       }
       for (const known of Object.keys(this.cache.files)) {
-        if (!sources.has(known)) delete this.cache.files[known]
+        if (
+          !sources.has(known) &&
+          !failedDirectories.some((directory) => isWithin(directory, known))
+        ) delete this.cache.files[known]
       }
 
       const codexTranscript = Object.values(this.cache.files)

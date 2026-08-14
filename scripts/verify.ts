@@ -26,6 +26,7 @@ import {
   claudeCooldownMs,
   fetchCodexPlanUsage,
   listUniqueTranscripts,
+  listUniqueTranscriptsWithStatus,
   parseClaudePlanUsage,
   parseCodexPlanUsage,
   parseRetryAfterMs,
@@ -377,6 +378,22 @@ async function checkUsage(): Promise<void> {
     pass('active and archived transcript roots merge without double counting')
   } else {
     fail('equivalent transcript roots were not de-duplicated correctly')
+  }
+  const deniedRoot = path.join(rootsFixture, 'temporarily-denied')
+  const denied = await listUniqueTranscriptsWithStatus([deniedRoot], async () => {
+    throw Object.assign(new Error('sharing violation'), { code: 'EACCES' })
+  })
+  const missing = await listUniqueTranscriptsWithStatus([deniedRoot], async () => {
+    throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+  })
+  if (
+    denied.files.length === 0 &&
+    denied.failedDirectories.includes(path.resolve(deniedRoot)) &&
+    missing.failedDirectories.length === 0
+  ) {
+    pass('transient transcript read failures are distinguished from missing roots')
+  } else {
+    fail('transient transcript read failures were treated as authoritative deletions')
   }
   fs.rmSync(rootsFixture, { recursive: true, force: true })
   const now = Date.now()

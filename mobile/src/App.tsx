@@ -563,6 +563,16 @@ export function App({ bridge }: AppProps): React.JSX.Element {
     return snapshot.sessions
   }, [filter, snapshot])
 
+  useEffect(() => {
+    if (
+      selected &&
+      snapshot &&
+      !snapshot.sessions.some((session) => session.key === selected.key)
+    ) {
+      setSelected(null)
+    }
+  }, [selected, snapshot])
+
   if (bridgeStatus?.requiresPairing) {
     return (
       <PairingScreen
@@ -604,7 +614,7 @@ export function App({ bridge }: AppProps): React.JSX.Element {
   }
 
   const currentSelected = selected
-    ? snapshot.sessions.find((session) => session.key === selected.key) ?? selected
+    ? snapshot.sessions.find((session) => session.key === selected.key) ?? null
     : null
 
   if (currentSelected) {

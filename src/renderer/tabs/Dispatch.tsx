@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_FALLBACK,
@@ -20,7 +20,7 @@ import { usePlatform } from '../platform'
 interface Props {
   attachments: string[]
   usage: UsageSnapshot
-  onClearAttachments: () => void
+  onClearAttachments: (sent?: string[]) => void
 }
 
 /**
@@ -107,6 +107,7 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
   const [agent, setAgent] = useState<DispatchTarget>('claude')
   const [cwd, setCwd] = useState('')
   const [prompt, setPrompt] = useState('')
+  const promptRevision = useRef(0)
   const [mode, setMode] = useState<PermissionMode>('manual')
   const [workflow, setWorkflow] = useState<ComboWorkflow>('bug-search')
   const [versions, setVersions] = useState<AgentVersions | null>(null)
@@ -186,16 +187,19 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
   }
 
   const send = async (): Promise<void> => {
+    const sentPrompt = prompt
+    const sentPromptRevision = promptRevision.current
+    const sentAttachments = [...attachments]
     setSending(true)
     setResult(null)
     try {
       const response = await window.notch.dispatch({
         agent,
         cwd,
-        prompt,
+        prompt: sentPrompt,
         permissionMode: mode,
         comboWorkflow: combo ? workflow : undefined,
-        attachments,
+        attachments: sentAttachments,
         // Sent for whichever agents this target actually runs. The pair sends
         // both, and each half is routed to the agent its key names.
         claude: agent === 'codex' ? undefined : claudeTuning,
@@ -203,8 +207,8 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
       })
       setResult(response)
       if (response.ok) {
-        setPrompt('')
-        onClearAttachments()
+        if (promptRevision.current === sentPromptRevision) setPrompt('')
+        onClearAttachments(sentAttachments)
       }
     } finally {
       setSending(false)
@@ -271,7 +275,10 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
           rows={5}
           value={prompt}
           placeholder={`What should ${target.short} do?`}
-          onChange={(event) => setPrompt(event.target.value)}
+          onChange={(event) => {
+            promptRevision.current++
+            setPrompt(event.target.value)
+          }}
         />
       </label>
 
@@ -378,7 +385,7 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
         <div className="attach-note">
           <b>Tray {attachments.length}</b>
           <span>{attachments.length} tray file{attachments.length === 1 ? '' : 's'} will be appended as @-references.</span>
-          <button type="button" onClick={onClearAttachments}>Clear</button>
+          <button type="button" onClick={() => onClearAttachments()}>Clear</button>
         </div>
       )}
 

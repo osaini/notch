@@ -116,6 +116,10 @@ export function installLauncher(): LauncherStatus {
 }
 
 export function uninstallLauncher(): LauncherStatus {
+  // Validate the caller before touching the one global shortcut. Otherwise a
+  // command run from an unrelated directory deletes the working launcher and
+  // only then throws while constructing the return status.
+  repoRoot()
   const target = shortcutPath()
   const existed = existsSync(target)
   if (existed) rmSync(target)

@@ -464,7 +464,21 @@ export class HookServer extends EventEmitter {
           } satisfies PendingPermissionInteraction
     if (interaction.kind === 'questions' && interaction.questions.length === 0) {
       this.sendJson(response, {})
-      this.dispatch(event)
+      this.emit('hook', event)
+      this.emit('blocked', event)
+      return
+    }
+    if (
+      interaction.kind === 'questions' &&
+      new Set(interaction.questions.map((question) => question.question)).size !==
+        interaction.questions.length
+    ) {
+      // Claude's hook response keys answers by prompt text. Two questions with
+      // the same prompt cannot be represented without silently overwriting one
+      // answer, so preserve correctness by falling back to the terminal UI.
+      this.sendJson(response, {})
+      this.emit('hook', event)
+      this.emit('blocked', event)
       return
     }
     const timer = setTimeout(

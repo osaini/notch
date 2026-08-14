@@ -83,6 +83,22 @@
         "tsconfig.web.json",
         "tsconfig.scripts.json"
       ]
+    },
+    {
+      "id": "android-companion",
+      "description": "Native Android lifecycle, foreground service, pairing, transport policy, parsing, and Compose UI",
+      "paths": [
+        "android/app/src/main",
+        "android/app/src/test",
+        "android/app/build.gradle.kts",
+        "android/build.gradle.kts",
+        "android/settings.gradle.kts",
+        "android/gradle.properties",
+        "android/gradle/wrapper/gradle-wrapper.properties",
+        "android/gradlew",
+        "android/gradlew.bat",
+        "android/README.md"
+      ]
     }
   ]
 }

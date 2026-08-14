@@ -137,6 +137,30 @@ async function testClaudeNormalizationAndRoundTrip(): Promise<void> {
   assert.deepEqual(await fallbackResponse.json(), {})
   assert.equal(fallback.getPendingInteractions().length, 0)
   fallback.stop()
+
+  const duplicate = new HookServer({ questionTimeoutMs: 1000 })
+  const duplicatePort = await duplicate.start(48400)
+  let duplicateBlocked = 0
+  duplicate.on('blocked', () => { duplicateBlocked++ })
+  const duplicateResponse = await fetch(hookUrl(duplicatePort, duplicate.authToken), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      hook_event_name: 'PreToolUse',
+      session_id: 'duplicate-prompts',
+      tool_name: 'AskUserQuestion',
+      tool_input: {
+        questions: [
+          { question: 'Which target?', header: 'First', options: [{ label: 'A' }] },
+          { question: 'Which target?', header: 'Second', options: [{ label: 'B' }] }
+        ]
+      }
+    })
+  })
+  assert.deepEqual(await duplicateResponse.json(), {})
+  assert.equal(duplicate.getPendingInteractions().length, 0)
+  assert.equal(duplicateBlocked, 1, 'duplicate prompts should fall back to the terminal')
+  duplicate.stop()
 }
 
 /**
@@ -1130,6 +1154,8 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
 
   let sessions: SessionState[] = []
   let clock = now
+  const spawnedFollowups: EventEmitter[] = []
+  let getProjects = async (): Promise<string[]> => [dir]
   const watcher = new EventEmitter() as EventEmitter & { getSnapshot(): SessionsSnapshot }
   watcher.getSnapshot = () => ({
     sessions,
@@ -1144,8 +1170,13 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
     userDataDir: dir,
     assetsDir: path.join(process.cwd(), 'mobile', 'dist'),
     watcher: watcher as unknown as SessionWatcher,
-    getProjects: async () => [dir],
+    getProjects: () => getProjects(),
     now: () => clock,
+    spawnProcess: ((..._args: unknown[]) => {
+      const child = new EventEmitter()
+      spawnedFollowups.push(child)
+      return child
+    }) as unknown as typeof import('node:child_process').spawn,
     dispatch: async (request) => {
       dispatched.push(request)
       const agent = request.agent === 'codex' ? 'codex' : 'claude'
@@ -1233,6 +1264,92 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
       headers: { cookie: 'notch_device=%E0%A4%A' }
     })
     assert.equal(malformedCookie.status, 401)
+
+    // Reserve an idle conversation before the child reports its asynchronous
+    // spawn event. Two phones racing the same follow-up must launch one agent,
+    // not two copies that mutate one transcript concurrently.
+    const followupSessionId = '12345678-1234-1234-1234-123456789abc'
+    sessions = [{
+      key: `claude:${followupSessionId}`,
+      agent: 'claude',
+      sessionId: followupSessionId,
+      cwd: dir,
+      name: 'Follow-up fixture',
+      kind: 'cli',
+      status: 'idle',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      needsInput: false,
+      canTerminate: true,
+      canFocus: true
+    }]
+    const sendFollowup = (): Promise<Response> => fetch(
+      `${origin}/api/v1/sessions/${encodeURIComponent(`claude:${followupSessionId}`)}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          cookie: `notch_device=${freshToken}`
+        },
+        body: JSON.stringify({ text: 'Continue' })
+      }
+    )
+    const firstFollowup = sendFollowup()
+    await waitFor(() => spawnedFollowups.length === 1)
+    const competingFollowup = await sendFollowup()
+    assert.equal(competingFollowup.status, 409)
+    assert.equal(spawnedFollowups.length, 1)
+    spawnedFollowups[0].emit('spawn')
+    assert.equal((await firstFollowup).status, 202)
+    spawnedFollowups[0].emit('exit', 0)
+
+    // The initial SSE snapshot captures A, then waits on project discovery.
+    // An update to B during that wait must be delivered afterward and in order.
+    let releaseProjects!: () => void
+    const projectsGate = new Promise<void>((resolve) => { releaseProjects = resolve })
+    let projectCalls = 0
+    getProjects = async () => {
+      projectCalls++
+      if (projectCalls === 1) await projectsGate
+      return [dir]
+    }
+    sessions = [{ ...sessions[0], name: 'Snapshot A', updatedAt: Date.now() }]
+    const orderedStreamPromise = fetch(`${origin}/api/v1/events`, {
+      headers: { cookie: `notch_device=${freshToken}` }
+    })
+    await waitFor(() => projectCalls === 1)
+    sessions = [{ ...sessions[0], name: 'Snapshot B', updatedAt: Date.now() + 1 }]
+    watcher.emit('update')
+    releaseProjects()
+    const orderedStream = await orderedStreamPromise
+    const orderedReader = orderedStream.body!.getReader()
+    const decoder = new TextDecoder()
+    let streamed = ''
+    const streamDeadline = Date.now() + 2000
+    while (!streamed.includes('Snapshot B') && Date.now() < streamDeadline) {
+      const read = await Promise.race([
+        orderedReader.read(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('SSE update timed out')), 500))
+      ])
+      if (read.done) break
+      streamed += decoder.decode(read.value, { stream: true })
+    }
+    assert.ok(streamed.includes('Snapshot A'))
+    assert.ok(streamed.includes('Snapshot B'))
+    assert.ok(streamed.indexOf('Snapshot A') < streamed.indexOf('Snapshot B'))
+    await orderedReader.cancel()
+    getProjects = async () => [dir]
+
+    const oversized = await fetch(`${origin}/api/v1/dispatch`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie: `notch_device=${freshToken}`
+      },
+      body: JSON.stringify({ prompt: 'x'.repeat(70 * 1024) })
+    })
+    assert.equal(oversized.status, 413)
+    assert.match((await oversized.json() as { error: string }).error, /too large/i)
 
     // Revoking one phone closes its already-authorized stream without
     // interrupting credentials belonging to another device.
