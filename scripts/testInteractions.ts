@@ -204,6 +204,16 @@ async function testHookAuthorization(): Promise<void> {
     })
     assert.equal(accepted.status, 200)
 
+    // Valid JSON primitives are malformed hook payloads, not process-ending
+    // exceptions. They should receive the same harmless empty response.
+    const nullPayload = await fetch(hookUrl(port, token), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'null'
+    })
+    assert.equal(nullPayload.status, 200)
+    assert.deepEqual(await nullPayload.json(), {})
+
     // A pre-rename install keeps working until the startup path rewrites it.
     // The listener is already up by then, and an unparseable settings.json means
     // the rewrite never happens at all — rejecting the old marker would silently
@@ -224,6 +234,27 @@ async function testHookAuthorization(): Promise<void> {
     // assertion hangs the run instead of reporting it.
     server.stop()
   }
+}
+
+async function testHookShutdownIsNotTimeout(): Promise<void> {
+  const server = new HookServer({ permissionTimeoutMs: 5_000 })
+  const port = await server.start(48430)
+  const results: unknown[] = []
+  server.on('interaction-resolved', ({ result }) => results.push(result))
+  const response = fetch(hookUrl(port, server.authToken), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      hook_event_name: 'PermissionRequest',
+      session_id: 'shutdown-test',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo test' }
+    })
+  })
+  await waitFor(() => server.getPendingInteractions().length === 1)
+  server.stop()
+  assert.equal((await response).status, 200)
+  assert.deepEqual(results, ['shutdown'])
 }
 
 /**
@@ -1019,6 +1050,18 @@ async function testConcurrentSettingsUpdates(): Promise<void> {
     assert.equal(store.get().position.offset, 1)
     assert.equal(saved.position.offset, 1)
 
+    const partials = new SettingsStore(path.join(dir, 'partial'))
+    await partials.load()
+    await Promise.all([
+      partials.update({ position: { edge: 'left', offset: 0.25 } }),
+      partials.update({ position: { displayId: 'display-2' } })
+    ])
+    assert.deepEqual(partials.get().position, {
+      displayId: 'display-2',
+      edge: 'left',
+      offset: 0.25
+    })
+
     // One failed transaction rejects only that caller; the serialization
     // queue must recover for the next update.
     const blockedPath = path.join(dir, 'blocked-by-file')
@@ -1070,6 +1113,13 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
           id: 'fresh',
           name: 'Fresh phone',
           tokenHash: hash(freshToken),
+          pairedAt: now,
+          lastSeenAt: now
+        },
+        {
+          id: 'revoked',
+          name: 'Revoked phone',
+          tokenHash: hash('revoked-device-token'),
           pairedAt: now,
           lastSeenAt: now
         }
@@ -1135,7 +1185,9 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
 
     assert.equal(await bridge.start(basePort), basePort)
     assert.equal(watcher.listenerCount('update'), 1)
-    assert.equal(bridge.getStatus().pairedDevices, 1)
+    assert.equal(bridge.getStatus().pairedDevices, 2)
+    clock += 11 * 60 * 1000
+    assert.equal(bridge.getStatus().pairingCode, '')
 
     const origin = `http://127.0.0.1:${basePort}`
     const expired = await fetch(`${origin}/api/v1/snapshot`, {
@@ -1143,7 +1195,7 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
     })
     assert.equal(expired.status, 401)
 
-    const dispatchFromPhone = async (agent: 'claude' | 'codex'): Promise<void> => {
+    const dispatchFromPhone = async (agent: 'claude' | 'codex'): Promise<{ key: string }> => {
       const response = await fetch(`${origin}/api/v1/dispatch`, {
         method: 'POST',
         headers: {
@@ -1153,11 +1205,18 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
         body: JSON.stringify({ agent, cwd: dir, prompt: `Run ${agent}` })
       })
       assert.equal(response.status, 201)
+      return response.json() as Promise<{ key: string }>
     }
     await dispatchFromPhone('claude')
     await dispatchFromPhone('codex')
     assert.equal(dispatched[0].permissionMode, 'bypassPermissions')
     assert.equal(dispatched[1].permissionMode, 'codex-bypass')
+
+    const concurrent = await Promise.all([
+      dispatchFromPhone('claude'),
+      dispatchFromPhone('claude')
+    ])
+    assert.notEqual(concurrent[0].key, concurrent[1].key)
 
     const invalidAgent = await fetch(`${origin}/api/v1/dispatch`, {
       method: 'POST',
@@ -1168,16 +1227,39 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
       body: JSON.stringify({ agent: 'claud', cwd: dir, prompt: 'Must not run' })
     })
     assert.equal(invalidAgent.status, 400)
-    assert.equal(dispatched.length, 2)
+    assert.equal(dispatched.length, 4)
 
     const malformedCookie = await fetch(`${origin}/api/v1/snapshot`, {
       headers: { cookie: 'notch_device=%E0%A4%A' }
     })
     assert.equal(malformedCookie.status, 401)
 
+    // Revoking one phone closes its already-authorized stream without
+    // interrupting credentials belonging to another device.
+    const revokedStream = await fetch(`${origin}/api/v1/events`, {
+      headers: { cookie: 'notch_device=revoked-device-token' }
+    })
+    assert.equal(revokedStream.status, 200)
+    const revokedReader = revokedStream.body!.getReader()
+    await revokedReader.read()
+    const revoked = await fetch(`${origin}/api/v1/pair`, {
+      method: 'DELETE',
+      headers: { cookie: 'notch_device=revoked-device-token' }
+    })
+    assert.equal(revoked.status, 200)
+    assert.equal((await revokedReader.read()).done, true)
+
+    const expiringStream = await fetch(`${origin}/api/v1/events`, {
+      headers: { cookie: `notch_device=${freshToken}` }
+    })
+    const expiringReader = expiringStream.body!.getReader()
+    await expiringReader.read()
+
     // Expiry is enforced by each authorization check, not only when the bridge
     // happens to restart and reload its device file.
     clock += 31 * 24 * 60 * 60 * 1000
+    watcher.emit('update')
+    assert.equal((await expiringReader.read()).done, true)
     const expiredWhileRunning = await fetch(`${origin}/api/v1/snapshot`, {
       headers: { cookie: `notch_device=${freshToken}` }
     })
@@ -1227,6 +1309,7 @@ function testPriorityPillLabels(): void {
 async function main(): Promise<void> {
   await testClaudeNormalizationAndRoundTrip()
   await testHookAuthorization()
+  await testHookShutdownIsNotTimeout()
   await testNeedsInputClearsOnNextPrompt()
   await testPermissionAllowEchoesInput()
   testHookSpecs()

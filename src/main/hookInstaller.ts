@@ -58,10 +58,20 @@ function isOurs(cmd: unknown): boolean {
  */
 function markerOf(cmd: unknown): string | null {
   if (!cmd || typeof cmd !== 'object') return null
-  const url = (cmd as HookCommand).url
-  if (typeof url !== 'string') return null
-  if (url.includes(HOOK_MARKER)) return HOOK_MARKER
-  return LEGACY_HOOK_MARKERS.find((marker) => url.includes(marker)) ?? null
+  const rawUrl = (cmd as HookCommand).url
+  if (typeof rawUrl !== 'string') return null
+  try {
+    const url = new URL(rawUrl)
+    const matches = (marker: string): boolean => {
+      const separator = marker.indexOf('=')
+      if (separator < 1) return false
+      return url.searchParams.get(marker.slice(0, separator)) === marker.slice(separator + 1)
+    }
+    if (matches(HOOK_MARKER)) return HOOK_MARKER
+    return LEGACY_HOOK_MARKERS.find(matches) ?? null
+  } catch {
+    return null
+  }
 }
 
 async function readSettings(): Promise<{ settings: Settings; existed: boolean; error?: string }> {

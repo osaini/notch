@@ -45,7 +45,8 @@ export function shortPath(p: string): string {
   if (!p) return ''
   const parts = p.split(/[\\/]/).filter(Boolean)
   if (parts.length <= 2) return p
-  return `…\\${parts.slice(-2).join('\\')}`
+  const separator = p.includes('\\') && !p.includes('/') ? '\\' : '/'
+  return `…${separator}${parts.slice(-2).join(separator)}`
 }
 
 export function modelLabel(model: string | null): string {

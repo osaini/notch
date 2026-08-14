@@ -257,6 +257,8 @@ export class NotchWindow {
     win.webContents.on('did-start-loading', () => {
       this.drag = null
       this.sentDragState = null
+      this.stopMotion()
+      this.reposition(false)
     })
 
 

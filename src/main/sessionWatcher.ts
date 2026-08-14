@@ -638,7 +638,10 @@ export class SessionWatcher extends EventEmitter {
   }
 
   clearNeedsInput(sessionId: string): void {
-    if (sessionId && this.needsInput.delete(sessionId)) void this.scan()
+    if (!sessionId) return
+    const removedNeedsInput = this.needsInput.delete(sessionId)
+    const removedReviewing = this.reviewing.delete(sessionId)
+    if (removedNeedsInput || removedReviewing) void this.scan()
   }
 
   markReviewing(sessionId: string): void {
@@ -748,6 +751,7 @@ export class SessionWatcher extends EventEmitter {
     const sessions: SessionState[] = []
     let pruned = 0
     let error: string | undefined
+    let claudeScanAuthoritative = true
     const liveClaudeIds = new Set<string>()
     // Filled from every live PID, before any display pruning, so that
     // `resolveParkedParents` judges a job by its process and not by whether
@@ -761,6 +765,7 @@ export class SessionWatcher extends EventEmitter {
         try {
           text = await fsp.readFile(path.join(SESSIONS_DIR, file), 'utf8')
         } catch {
+          claudeScanAuthoritative = false
           continue
         }
         const parsed = parseClaudeSession(file, text)
@@ -800,15 +805,21 @@ export class SessionWatcher extends EventEmitter {
         if (!this.suppressed.has(session.key)) sessions.push(session)
       }
     } catch (err) {
+      claudeScanAuthoritative = false
       error = (err as Error).message
     }
 
-    this.titles.prune(liveClaudeIds)
-    for (const id of [...this.needsInput.keys()]) {
-      if (!liveClaudeIds.has(id)) this.needsInput.delete(id)
-    }
-    for (const id of [...this.reviewing]) {
-      if (!liveClaudeIds.has(id)) this.reviewing.delete(id)
+    // A failed directory/file read is not evidence that a process disappeared.
+    // Preserve hook-derived state until a complete sweep can authoritatively
+    // prove which Claude sessions are still live.
+    if (claudeScanAuthoritative) {
+      this.titles.prune(liveClaudeIds)
+      for (const id of [...this.needsInput.keys()]) {
+        if (!liveClaudeIds.has(id)) this.needsInput.delete(id)
+      }
+      for (const id of [...this.reviewing]) {
+        if (!liveClaudeIds.has(id)) this.reviewing.delete(id)
+      }
     }
 
     const [codexFiles, codexTitles, codexTuiProcesses] = await Promise.all([
@@ -939,6 +950,8 @@ export class SessionWatcher extends EventEmitter {
       color: snapshot.color,
       counts: snapshot.counts,
       prunedCount: snapshot.prunedCount,
+      parkedCount: snapshot.parkedCount,
+      scannedAt: snapshot.scannedAt,
       error: snapshot.error,
       designError: snapshot.designError
     })

@@ -18,14 +18,13 @@ import { DesignWatcher, DESIGN_WINDOW_TITLES } from '../src/main/designWatcher'
 import {
   HookServer,
   HOOK_EVENTS,
-  HOOK_MARKER,
-  LEGACY_HOOK_MARKERS,
   hookUrl
 } from '../src/main/hookServer'
-import { SETTINGS_PATH, getHookStatus, installHooks, uninstallHooks } from '../src/main/hookInstaller'
+import { SETTINGS_PATH, getHookStatus } from '../src/main/hookInstaller'
 import {
   UsageScanner,
   claudeCooldownMs,
+  fetchCodexPlanUsage,
   listUniqueTranscripts,
   parseClaudePlanUsage,
   parseCodexPlanUsage,
@@ -51,6 +50,7 @@ import { resolveAgentPaths } from '../src/main/agentPaths'
 import { savePastedImage, sniffImageExtension } from '../src/main/pastedImages'
 import { isSafeMobileEndpointAddress } from '../src/main/mobileBridge'
 import { isReadablePastedImagePayload } from '../src/shared/types'
+import { shortPath } from '../src/renderer/format'
 
 const pass = (msg: string): void => console.log(`  PASS  ${msg}`)
 const fail = (msg: string): void => {
@@ -380,6 +380,16 @@ async function checkUsage(): Promise<void> {
   }
   fs.rmSync(rootsFixture, { recursive: true, force: true })
   const now = Date.now()
+  const originalCodexPath = process.env.CODEX_CLI_PATH
+  process.env.CODEX_CLI_PATH = path.join(os.tmpdir(), 'definitely-missing-codex-binary')
+  const missingCodex = await fetchCodexPlanUsage(null, null)
+  if (originalCodexPath === undefined) delete process.env.CODEX_CLI_PATH
+  else process.env.CODEX_CLI_PATH = originalCodexPath
+  if (missingCodex.state === 'unavailable' && missingCodex.message?.includes('unavailable')) {
+    pass('a missing Codex binary degrades usage state without a stream crash')
+  } else {
+    fail(`a missing Codex binary returned an unexpected plan: ${JSON.stringify(missingCodex)}`)
+  }
   const claudeFixture = parseClaudePlanUsage(
     {
       five_hour: { utilization: 97, resets_at: new Date(now - 60_000).toISOString() },
@@ -566,91 +576,24 @@ async function checkUsage(): Promise<void> {
 }
 
 async function checkHookInstall(): Promise<void> {
-  section('hookInstaller (non-destructive round trip)')
-  const before = fs.existsSync(SETTINGS_PATH) ? fs.readFileSync(SETTINGS_PATH, 'utf8') : null
-  const beforeKeys = before ? Object.keys(JSON.parse(before)) : []
-  info(`before: ${beforeKeys.join(', ')}`)
-
+  section('hookInstaller (read-only live status)')
   try {
-    const installed = await installHooks(47821)
-    const afterInstall = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8')) as Record<string, unknown>
-    info(`after install: ${Object.keys(afterInstall).join(', ')}`)
-
-    if (installed.installed && installed.events.length === HOOK_EVENTS.length) {
-      pass(`installed ${HOOK_EVENTS.length} hook events`)
-    }
-    else fail(`installed events: ${installed.events.join(', ')}`)
-
-    for (const key of beforeKeys.filter((key) => key !== 'hooks')) {
-      if (JSON.stringify(afterInstall[key]) === JSON.stringify(JSON.parse(before!)[key])) {
-        pass(`original key "${key}" untouched`)
-      } else {
-        fail(`original key "${key}" was modified`)
-      }
-    }
-
-    if (installed.backupPath && fs.existsSync(installed.backupPath)) pass(`backup written to ${path.basename(installed.backupPath)}`)
-    else fail('no backup written')
-
+    const exists = fs.existsSync(SETTINGS_PATH)
+    const settings = exists
+      ? JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8')) as Record<string, unknown>
+      : {}
+    info(`keys: ${Object.keys(settings).join(', ') || '(none)'}`)
     const status = await getHookStatus()
-    if (status.installed && status.port === 47821) pass('status reports installed on port 47821')
-    else fail(`status: installed=${status.installed} port=${status.port}`)
-
-    await uninstallHooks()
-    const afterUninstall = fs.readFileSync(SETTINGS_PATH, 'utf8')
-    const parsed = JSON.parse(afterUninstall) as Record<string, unknown>
-    info(`after uninstall: ${Object.keys(parsed).join(', ')}`)
-
-    const expected = before ? stripNotchHooks(JSON.parse(before) as Record<string, unknown>) : {}
-    if (JSON.stringify(parsed) === JSON.stringify(expected)) {
-      pass('uninstall removed only Notch hook entries')
-    } else {
-      fail('uninstall changed settings beyond Notch hook entries')
+    info(`installed=${status.installed} port=${status.port ?? 'none'} events=${status.events.join(', ') || 'none'}`)
+    pass(`settings ${exists ? 'parse and hook status resolves' : 'are absent and hook status resolves'}`)
+    if (status.installed && status.events.length !== HOOK_EVENTS.length) {
+      fail(`partial hook install: ${status.events.join(', ')}`)
+    } else if (status.installed) {
+      pass(`all ${HOOK_EVENTS.length} hook events are installed`)
     }
   } catch (err) {
     fail(`threw: ${(err as Error).message}`)
-  } finally {
-    if (before === null) {
-      if (fs.existsSync(SETTINGS_PATH)) fs.unlinkSync(SETTINGS_PATH)
-    } else {
-      fs.writeFileSync(SETTINGS_PATH, before, 'utf8')
-    }
-    info('restored the exact starting settings.json')
   }
-}
-
-function stripNotchHooks(settings: Record<string, unknown>): Record<string, unknown> {
-  const clone = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>
-  const hooks =
-    clone.hooks && typeof clone.hooks === 'object' && !Array.isArray(clone.hooks)
-      ? (clone.hooks as Record<string, unknown>)
-      : null
-  if (!hooks) return clone
-
-  for (const [event, rawGroups] of Object.entries(hooks)) {
-    if (!Array.isArray(rawGroups)) continue
-    const groups = rawGroups
-      .map((rawGroup) => {
-        if (!rawGroup || typeof rawGroup !== 'object') return rawGroup
-        const group = rawGroup as Record<string, unknown>
-        if (!Array.isArray(group.hooks)) return group
-        const commands = group.hooks.filter((command) => {
-          if (!command || typeof command !== 'object') return true
-          const url = (command as Record<string, unknown>).url
-          if (typeof url !== 'string') return true
-          // Legacy markers count as ours, so uninstall must remove them too —
-          // otherwise a pre-rename install could never be cleaned up.
-          return ![HOOK_MARKER, ...LEGACY_HOOK_MARKERS].some((marker) => url.includes(marker))
-        })
-        if (commands.length === group.hooks.length) return group
-        return commands.length ? { ...group, hooks: commands } : null
-      })
-      .filter((group) => group !== null)
-    if (groups.length) hooks[event] = groups
-    else delete hooks[event]
-  }
-  if (Object.keys(hooks).length === 0) delete clone.hooks
-  return clone
 }
 
 async function checkDispatch(): Promise<void> {
@@ -1033,6 +976,11 @@ function checkModelEffort(): void {
 }
 
 async function main(): Promise<void> {
+  if (
+    shortPath('/Users/alice/work/repo') === '…/work/repo' &&
+    shortPath('C:\\Users\\alice\\repo') === '…\\alice\\repo'
+  ) pass('short paths preserve POSIX and Windows separators')
+  else fail('short paths use the wrong platform separator')
   await checkSessions()
   await checkDesign()
   await checkUsage()

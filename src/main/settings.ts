@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import type { AppSettings, ScreenEdge, ThemePreference } from '@shared/types'
+import type { AppSettings, AppSettingsPatch, ScreenEdge, ThemePreference } from '@shared/types'
 
 const EDGES = new Set<ScreenEdge>(['top', 'bottom', 'left', 'right'])
 const THEMES = new Set<ThemePreference>(['dark', 'light', 'system'])
@@ -82,7 +82,7 @@ export class SettingsStore extends EventEmitter {
     return this.value
   }
 
-  update(patch: Partial<AppSettings>): Promise<AppSettings> {
+  update(patch: AppSettingsPatch): Promise<AppSettings> {
     const result = this.updateWork.then(async () => {
       const current = this.value
       const merged: AppSettings = {

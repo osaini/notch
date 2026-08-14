@@ -16,6 +16,7 @@ import type {
   SessionState
 } from '@shared/types'
 import { findTranscriptInRoots } from './claudeTranscript'
+import { platform } from './platform'
 import type { SessionWatcher } from './sessionWatcher'
 
 const DEFAULT_MOBILE_PORT = 47822
@@ -380,12 +381,14 @@ export class MobileBridge extends EventEmitter {
   private pairingExpiresAt = 0
   private devices: StoredDevice[] = []
   private readonly devicesPath: string
-  private readonly clients = new Set<http.ServerResponse>()
+  private readonly clients = new Map<http.ServerResponse, { deviceId: string; pairedAt: number }>()
   private readonly runningSessions = new Set<string>()
   private readonly pairAttempts = new Map<string, PairAttempt>()
   private pairAttemptsForCode = 0
   private readonly transcriptCache = new Map<string, string>()
   private heartbeat: NodeJS.Timeout | null = null
+  private pairingTimer: NodeJS.Timeout | null = null
+  private readonly dispatchWork = new Map<string, Promise<void>>()
   private lastError: string | undefined
   private broadcastQueued = false
   private watcherListener: (() => void) | null = null
@@ -417,7 +420,8 @@ export class MobileBridge extends EventEmitter {
         this.watcherListener = () => this.queueBroadcast()
         this.options.watcher.on('update', this.watcherListener)
         this.heartbeat = setInterval(() => {
-          for (const client of this.clients) client.write(': heartbeat\n\n')
+          this.pruneUnauthorizedClients()
+          for (const client of this.clients.keys()) client.write(': heartbeat\n\n')
         }, HEARTBEAT_MS)
         // Before the first status goes out, so the Settings tab never shows an
         // unranked list on the one render the user is most likely to act on.
@@ -439,7 +443,9 @@ export class MobileBridge extends EventEmitter {
     this.watcherListener = null
     if (this.heartbeat) clearInterval(this.heartbeat)
     this.heartbeat = null
-    for (const client of this.clients) client.end()
+    if (this.pairingTimer) clearTimeout(this.pairingTimer)
+    this.pairingTimer = null
+    for (const client of this.clients.keys()) client.end()
     this.clients.clear()
     this.server?.close()
     this.server = null
@@ -500,23 +506,34 @@ export class MobileBridge extends EventEmitter {
   }
 
   getStatus(): MobileBridgeStatus {
+    const now = this.now()
+    const pairingActive = Boolean(this.pairingCode) && now < this.pairingExpiresAt
     return {
       running: Boolean(this.server && this.boundPort),
       port: this.boundPort,
       endpoints: this.endpoints(),
-      pairingCode: this.pairingCode,
-      pairingExpiresAt: this.pairingExpiresAt,
+      pairingCode: pairingActive ? this.pairingCode : '',
+      pairingExpiresAt: pairingActive ? this.pairingExpiresAt : 0,
       pairedDevices: this.devices.filter(
-        (device) => this.now() - device.pairedAt < DEVICE_TTL_MS
+        (device) => now - device.pairedAt < DEVICE_TTL_MS
       ).length,
       error: this.lastError
     }
   }
 
   regeneratePairing(): MobileBridgeStatus {
+    if (this.pairingTimer) clearTimeout(this.pairingTimer)
     this.pairingCode = String(randomInt(100_000, 1_000_000))
     this.pairingExpiresAt = this.now() + PAIRING_TTL_MS
     this.pairAttemptsForCode = 0
+    const expiresAt = this.pairingExpiresAt
+    this.pairingTimer = setTimeout(() => {
+      if (this.pairingExpiresAt !== expiresAt || this.now() < expiresAt) return
+      this.pairingCode = ''
+      this.pairingExpiresAt = 0
+      this.pairingTimer = null
+      this.emit('status', this.getStatus())
+    }, PAIRING_TTL_MS)
     const status = this.getStatus()
     this.emit('status', status)
     return status
@@ -525,7 +542,7 @@ export class MobileBridge extends EventEmitter {
   async clearPairedDevices(): Promise<MobileBridgeStatus> {
     this.devices = []
     await this.saveDevices()
-    for (const client of this.clients) client.end()
+    for (const client of this.clients.keys()) client.end()
     this.clients.clear()
     const status = this.regeneratePairing()
     return status
@@ -602,8 +619,10 @@ export class MobileBridge extends EventEmitter {
 
     if (method === 'DELETE' && url.pathname === '/api/v1/pair') {
       this.assertSafeOrigin(req)
-      this.devices = this.devices.filter((device) => device.id !== authorizedDevice?.id)
+      const removedId = authorizedDevice?.id
+      this.devices = this.devices.filter((device) => device.id !== removedId)
       await this.saveDevices()
+      this.closeClients((client) => client.deviceId === removedId)
       res.setHeader(
         'set-cookie',
         'notch_device=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'
@@ -618,7 +637,8 @@ export class MobileBridge extends EventEmitter {
       return
     }
     if (method === 'GET' && url.pathname === '/api/v1/events') {
-      await this.openEventStream(req, res)
+      if (!authorizedDevice) throw new HttpError(401, 'Pair this phone with Notch first.')
+      await this.openEventStream(req, res, authorizedDevice)
       return
     }
     if (method === 'POST' && url.pathname === '/api/v1/dispatch') {
@@ -866,39 +886,43 @@ export class MobileBridge extends EventEmitter {
     if (!cwd || !prompt) throw new HttpError(400, 'Choose a project and enter a prompt.')
     if (prompt.length > 20_000) throw new HttpError(413, 'Prompt is too long.')
     const projects = await this.options.getProjects()
-    const selected = projects.find((candidate) => candidate.toLowerCase() === cwd.toLowerCase())
+    const cwdKey = platform.paths.projectPathKey(platform.paths.normalizeProjectPath(cwd))
+    const selected = projects.find((candidate) =>
+      platform.paths.projectPathKey(platform.paths.normalizeProjectPath(candidate)) === cwdKey)
     if (!selected) throw new HttpError(403, 'Choose a project from the computer-owned list.')
+    const targetKey = `${agent}\0${platform.paths.projectPathKey(platform.paths.normalizeProjectPath(selected))}`
+    return this.runSerializedDispatch(targetKey, async () => {
+      const before = new Set(
+        this.options.watcher
+          .getSnapshot()
+          .sessions.filter((session) => session.agent === agent)
+          .map((session) => session.key)
+      )
+      const result = await this.options.dispatch({
+        agent,
+        cwd: selected,
+        prompt,
+        // The phone has no terminal permission UI. Pairing is the explicit trust
+        // grant, so mobile-launched work must use the unattended modes promised
+        // by the companion UI and threat model.
+        permissionMode: agent === 'codex' ? 'codex-bypass' : 'bypassPermissions'
+      })
+      if (!result.ok) throw new HttpError(500, result.error || 'The agent did not start.')
 
-    const before = new Set(
-      this.options.watcher
-        .getSnapshot()
-        .sessions.filter((session) => session.agent === agent)
-        .map((session) => session.key)
-    )
-    const result = await this.options.dispatch({
-      agent,
-      cwd: selected,
-      prompt,
-      // The phone has no terminal permission UI. Pairing is the explicit trust
-      // grant, so mobile-launched work must use the unattended modes promised
-      // by the companion UI and threat model.
-      permissionMode: agent === 'codex' ? 'codex-bypass' : 'bypassPermissions'
+      const discovered = await this.waitForNewSession(agent, selected, before, 4500)
+      if (discovered) return this.toMobileSession(discovered)
+      return {
+        key: `pending:${randomUUID()}`,
+        agent,
+        name: prompt.length > 54 ? `${prompt.slice(0, 51)}…` : prompt,
+        project: projectName(selected),
+        path: selected,
+        status: 'working',
+        detail: 'Started in Windows Terminal; waiting for its session record',
+        updatedAt: Date.now(),
+        canMessage: false
+      }
     })
-    if (!result.ok) throw new HttpError(500, result.error || 'The agent did not start.')
-
-    const discovered = await this.waitForNewSession(agent, selected, before, 4500)
-    if (discovered) return this.toMobileSession(discovered)
-    return {
-      key: `pending:${randomUUID()}`,
-      agent,
-      name: prompt.length > 54 ? `${prompt.slice(0, 51)}…` : prompt,
-      project: projectName(selected),
-      path: selected,
-      status: 'working',
-      detail: 'Started in Windows Terminal; waiting for its session record',
-      updatedAt: Date.now(),
-      canMessage: false
-    }
   }
 
   private async waitForNewSession(
@@ -915,7 +939,8 @@ export class MobileBridge extends EventEmitter {
           (session) =>
             session.agent === agent &&
             !before.has(session.key) &&
-            session.cwd.toLowerCase() === cwd.toLowerCase()
+            platform.paths.projectPathKey(platform.paths.normalizeProjectPath(session.cwd)) ===
+              platform.paths.projectPathKey(platform.paths.normalizeProjectPath(cwd))
         )
       if (found) return found
       await new Promise<void>((resolve) => setTimeout(resolve, 250))
@@ -925,7 +950,8 @@ export class MobileBridge extends EventEmitter {
 
   private async openEventStream(
     req: http.IncomingMessage,
-    res: http.ServerResponse
+    res: http.ServerResponse,
+    device: StoredDevice
   ): Promise<void> {
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -933,7 +959,7 @@ export class MobileBridge extends EventEmitter {
       connection: 'keep-alive'
     })
     res.write(`event: snapshot\ndata: ${JSON.stringify(await this.snapshot())}\n\n`)
-    this.clients.add(res)
+    this.clients.set(res, { deviceId: device.id, pairedAt: device.pairedAt })
     req.on('close', () => this.clients.delete(res))
   }
 
@@ -952,8 +978,44 @@ export class MobileBridge extends EventEmitter {
 
   private async broadcastSnapshot(): Promise<void> {
     if (!this.clients.size) return
+    this.pruneUnauthorizedClients()
+    if (!this.clients.size) return
     const payload = `event: snapshot\ndata: ${JSON.stringify(await this.snapshot())}\n\n`
-    for (const client of this.clients) client.write(payload)
+    for (const client of this.clients.keys()) client.write(payload)
+  }
+
+  private closeClients(predicate: (client: { deviceId: string; pairedAt: number }) => boolean): void {
+    for (const [response, client] of this.clients) {
+      if (!predicate(client)) continue
+      this.clients.delete(response)
+      response.end()
+    }
+  }
+
+  private pruneUnauthorizedClients(): void {
+    const now = this.now()
+    const activeIds = new Set(
+      this.devices
+        .filter((device) => now - device.pairedAt < DEVICE_TTL_MS)
+        .map((device) => device.id)
+    )
+    this.closeClients((client) =>
+      now - client.pairedAt >= DEVICE_TTL_MS || !activeIds.has(client.deviceId))
+  }
+
+  private async runSerializedDispatch<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.dispatchWork.get(key) ?? Promise.resolve()
+    let release!: () => void
+    const current = new Promise<void>((resolve) => { release = resolve })
+    const tail = previous.then(() => current)
+    this.dispatchWork.set(key, tail)
+    await previous
+    try {
+      return await task()
+    } finally {
+      release()
+      if (this.dispatchWork.get(key) === tail) this.dispatchWork.delete(key)
+    }
   }
 
   private async serveAsset(

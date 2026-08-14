@@ -486,6 +486,11 @@ export interface AppSettings {
   mobileBridge: boolean
 }
 
+/** Settings updates are shallow except for position, whose fields may be patched independently. */
+export type AppSettingsPatch = Omit<Partial<AppSettings>, 'position'> & {
+  position?: Partial<NotchPosition>
+}
+
 /**
  * Why an address is or is not worth typing into a phone.
  *
@@ -586,7 +591,7 @@ export interface NotchApi {
   terminateSession(key: string): Promise<SessionActionResult>
   focusSession(key: string): Promise<SessionActionResult>
   getSettings(): Promise<AppSettings>
-  updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+  updateSettings(patch: AppSettingsPatch): Promise<AppSettings>
   getDisplays(): Promise<DisplayOption[]>
   /** Host OS copy and feature flags. Static for the process lifetime. */
   getPlatformInfo(): Promise<PlatformInfo>

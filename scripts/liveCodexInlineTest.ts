@@ -33,8 +33,16 @@ function request(method: string, params: Record<string, unknown>): Promise<unkno
 }
 
 const finished = new Promise<void>((resolve, reject) => {
+  const fail = (error: Error): void => {
+    clearTimeout(timeout)
+    reject(error)
+  }
+  const succeed = (): void => {
+    clearTimeout(timeout)
+    resolve()
+  }
   const timeout = setTimeout(
-    () => reject(new Error('Timed out waiting for the inline answer')),
+    () => fail(new Error('Timed out waiting for the inline answer')),
     120_000
   )
 
@@ -63,15 +71,14 @@ const finished = new Promise<void>((resolve, reject) => {
       message.method === 'turn/completed' &&
       message.params?.threadId === threadId
     ) {
-      clearTimeout(timeout)
       console.log(JSON.stringify(message.params))
       console.log('CODEX_INLINE_TURN_COMPLETED')
-      resolve()
+      succeed()
     }
   })
-  socket.once('error', reject)
+  socket.once('error', fail)
   socket.once('close', () => {
-    if (pending.size > 0) reject(new Error('App Server disconnected'))
+    if (pending.size > 0) fail(new Error('App Server disconnected'))
   })
 })
 

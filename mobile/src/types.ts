@@ -52,5 +52,8 @@ export interface Bridge {
   getMessages(key: string): Promise<ChatMessage[]>
   sendMessage(key: string, text: string): Promise<ChatMessage>
   dispatch(input: DispatchInput): Promise<SessionSummary>
-  subscribe(onSnapshot: (snapshot: Snapshot) => void): () => void
+  subscribe(
+    onSnapshot: (snapshot: Snapshot) => void,
+    onDisconnect?: () => void
+  ): () => void
 }

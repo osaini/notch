@@ -481,7 +481,7 @@ export function App(): React.JSX.Element {
             </span>
           </div>
 
-          <div className="panel" aria-hidden={!open}>
+          <div className="panel" aria-hidden={!open} inert={!open}>
             {takeover && activeInteraction ? (
               <InteractionTakeover
                 interaction={activeInteraction}

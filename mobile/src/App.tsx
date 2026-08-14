@@ -84,15 +84,23 @@ function Conversation({
   const [loadingMessages, setLoadingMessages] = useState(true)
 
   useEffect(() => {
+    let cancelled = false
     setLoadingMessages(true)
     void bridge
       .getMessages(session.key)
-      .then(setMessages)
-      .catch((error: unknown) => {
-        setSendError(error instanceof Error ? error.message : 'Transcript could not be loaded.')
+      .then((next) => {
+        if (!cancelled) setMessages(next)
       })
-      .finally(() => setLoadingMessages(false))
-  }, [bridge, session.key])
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setSendError(error instanceof Error ? error.message : 'Transcript could not be loaded.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingMessages(false)
+      })
+    return () => { cancelled = true }
+  }, [bridge, session.key, session.status, session.updatedAt])
 
   const canSend = session.canMessage && session.status === 'idle'
 
@@ -509,7 +517,28 @@ export function App({ bridge }: AppProps): React.JSX.Element {
         const next = await bridge.getSnapshot()
         if (cancelled) return
         setSnapshot(next)
-        unsubscribe = bridge.subscribe(setSnapshot)
+        unsubscribe = bridge.subscribe(
+          (value) => {
+            if (cancelled) return
+            setSnapshot(value)
+            setConnectionError('')
+          },
+          () => {
+            if (cancelled) return
+            setSnapshot((current) => current ? { ...current, connected: false } : current)
+            void bridge.getStatus().then((latest) => {
+              if (cancelled) return
+              setBridgeStatus(latest)
+              if (latest.requiresPairing) {
+                setSnapshot(null)
+                setConnectionError('This phone needs to be paired again.')
+              }
+            }).catch((error: unknown) => {
+              if (cancelled) return
+              setConnectionError(error instanceof Error ? error.message : 'Notch could not be reached.')
+            })
+          }
+        )
       } catch (error) {
         if (cancelled) return
         const unavailable =

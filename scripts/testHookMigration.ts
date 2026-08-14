@@ -52,7 +52,9 @@ const legacyInstall = {
     PreToolUse: [
       { matcher: 'AskUserQuestion', hooks: [{ type: 'http', url: legacyUrl(), timeout: 600 }] },
       // Someone else's hook, on an event we rewrite. The easiest thing to break.
-      { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo mine' }] }
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo mine' }] },
+      // Contains the old raw substring but not the app=notch query parameter.
+      { matcher: 'Foreign', hooks: [{ type: 'http', url: 'https://example.test/hook?myapp=notch' }] }
     ],
     UserPromptSubmit: [{ hooks: [{ type: 'http', url: legacyUrl(), timeout: 5 }] }]
   },
@@ -61,6 +63,10 @@ const legacyInstall = {
 }
 
 const USER_HOOK = { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo mine' }] }
+const FOREIGN_HOOK = {
+  matcher: 'Foreign',
+  hooks: [{ type: 'http', url: 'https://example.test/hook?myapp=notch' }]
+}
 /** A backup captured before the 0.1.x install existed — the file we must not lose. */
 const PRISTINE_BACKUP = `${JSON.stringify({ model: 'opus', tui: 'fullscreen' }, null, 2)}\n`
 
@@ -73,8 +79,8 @@ function seed(): void {
 function markers(): { current: number; legacy: number } {
   const text = fs.readFileSync(settingsPath, 'utf8')
   return {
-    current: (text.match(/app=notch\b/g) ?? []).length,
-    legacy: (text.match(/app=windows-notch/g) ?? []).length
+    current: (text.match(/[?&]app=notch(?:&|"|$)/g) ?? []).length,
+    legacy: (text.match(/[?&]app=windows-notch(?:&|"|$)/g) ?? []).length
   }
 }
 
@@ -136,6 +142,11 @@ async function main(): Promise<void> {
     USER_HOOK,
     "the user's own hook was modified"
   )
+  assert.deepEqual(
+    migrated.hooks.PreToolUse.find((group) => (group as { matcher?: string }).matcher === 'Foreign'),
+    FOREIGN_HOOK,
+    'a foreign URL containing myapp=notch was misclassified as ours'
+  )
   assert.equal(migrated.model, 'opus')
   assert.equal(migrated.tui, 'fullscreen')
   assert.equal(migrated.skipDangerousModePermissionPrompt, true)
@@ -155,7 +166,7 @@ async function main(): Promise<void> {
   assert.deepEqual(markers(), { current: 0, legacy: 0 }, 'uninstall left entries behind')
   assert.deepEqual(
     readSettings().hooks,
-    { PreToolUse: [USER_HOOK] },
+    { PreToolUse: [USER_HOOK, FOREIGN_HOOK] },
     'uninstall must leave exactly the user hook'
   )
   assert.equal(readSettings().model, 'opus')
@@ -166,7 +177,7 @@ async function main(): Promise<void> {
   seed()
   await uninstallHooks()
   assert.deepEqual(markers(), { current: 0, legacy: 0 }, 'a pure legacy install must be removable')
-  assert.deepEqual(readSettings().hooks, { PreToolUse: [USER_HOOK] })
+  assert.deepEqual(readSettings().hooks, { PreToolUse: [USER_HOOK, FOREIGN_HOOK] })
   pass('a 0.1.x install can be uninstalled without an install migrating it first')
 
   console.log('\nHook migration tests passed.')

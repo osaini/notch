@@ -678,7 +678,7 @@ async function fetchClaudePlanUsage(
   )
 }
 
-async function fetchCodexPlanUsage(
+export async function fetchCodexPlanUsage(
   transcript: PlanUsage | null,
   previous: PlanUsage | null
 ): Promise<PlanUsage> {
@@ -696,7 +696,7 @@ async function fetchCodexPlanUsage(
       if (settled) return
       settled = true
       clearTimeout(timeout)
-      child.stdin.end()
+      if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end()
       if (!child.killed) child.kill()
       resolve(plan)
     }
@@ -706,6 +706,7 @@ async function fetchCodexPlanUsage(
     )
 
     child.once('error', () => finish(fallback('Codex CLI is unavailable.')))
+    child.stdin.on('error', () => finish(fallback('Codex CLI is unavailable.')))
     child.once('close', () => {
       if (!settled) finish(fallback('Codex usage refresh ended unexpectedly.'))
     })

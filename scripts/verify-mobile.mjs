@@ -7,31 +7,27 @@ const edge =
   process.env.EDGE_PATH ??
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 const targetUrl = process.env.NOTCH_MOBILE_URL ?? 'http://127.0.0.1:4174'
-const port = 49331
 const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'notch-mobile-edge-'))
 const outputDir = path.resolve('mobile', 'artifacts')
 
 await fs.mkdir(outputDir, { recursive: true })
 
-const browser = spawn(
-  edge,
-  [
-    '--headless=new',
-    '--disable-gpu',
-    '--hide-scrollbars',
-    `--remote-debugging-port=${port}`,
-    `--user-data-dir=${profile}`,
-    '--window-size=390,844',
-    targetUrl
-  ],
-  { stdio: 'ignore', windowsHide: true }
-)
+let browser
+let socket
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function pageTarget() {
-  for (let attempt = 0; attempt < 50; attempt++) {
+  let port
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (browser?.exitCode !== null) throw new Error('Mobile verification browser exited during startup')
     try {
+      if (!port) {
+        const activePort = await fs.readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')
+        const parsed = Number.parseInt(activePort.split(/\r?\n/, 1)[0], 10)
+        if (Number.isInteger(parsed) && parsed > 0) port = parsed
+      }
+      if (!port) throw new Error('DevTools port is not ready')
       const response = await fetch(`http://127.0.0.1:${port}/json/list`)
       const targets = await response.json()
       const page = targets.find((target) => target.type === 'page')
@@ -44,25 +40,8 @@ async function pageTarget() {
   throw new Error('Timed out connecting to the mobile verification browser')
 }
 
-const target = await pageTarget()
-const socket = new WebSocket(target.webSocketDebuggerUrl)
-await new Promise((resolve, reject) => {
-  socket.addEventListener('open', resolve, { once: true })
-  socket.addEventListener('error', reject, { once: true })
-})
-
 let nextId = 0
 const pending = new Map()
-socket.addEventListener('message', (event) => {
-  const message = JSON.parse(event.data)
-  if (!message.id) return
-  const entry = pending.get(message.id)
-  if (!entry) return
-  pending.delete(message.id)
-  if (message.error) entry.reject(new Error(message.error.message))
-  else entry.resolve(message.result)
-})
-
 function command(method, params = {}) {
   const id = ++nextId
   socket.send(JSON.stringify({ id, method, params }))
@@ -94,6 +73,38 @@ function assert(value, message) {
 }
 
 try {
+  browser = spawn(
+    edge,
+    [
+      '--headless=new',
+      '--disable-gpu',
+      '--hide-scrollbars',
+      '--remote-debugging-port=0',
+      `--user-data-dir=${profile}`,
+      '--window-size=390,844',
+      targetUrl
+    ],
+    { stdio: 'ignore', windowsHide: true }
+  )
+  const spawnFailure = new Promise((_, reject) => {
+    browser.once('error', reject)
+  })
+  const target = await Promise.race([pageTarget(), spawnFailure])
+  socket = new WebSocket(target.webSocketDebuggerUrl)
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve, { once: true })
+    socket.addEventListener('error', reject, { once: true })
+  })
+  socket.addEventListener('message', (event) => {
+    const message = JSON.parse(event.data)
+    if (!message.id) return
+    const entry = pending.get(message.id)
+    if (!entry) return
+    pending.delete(message.id)
+    if (message.error) entry.reject(new Error(message.error.message))
+    else entry.resolve(message.result)
+  })
+
   await command('Page.enable')
   await command('Runtime.enable')
   await command('Emulation.setDeviceMetricsOverride', {
@@ -152,16 +163,23 @@ try {
 
   console.log('Mobile verification passed: dashboard, conversation, message send, and dispatch sheet.')
 } finally {
-  try {
-    await command('Browser.close')
-  } catch {
-    browser.kill()
+  if (socket?.readyState === WebSocket.OPEN) {
+    try {
+      await command('Browser.close')
+    } catch {
+      browser?.kill()
+    }
+    socket.close()
+  } else {
+    browser?.kill()
   }
-  socket.close()
-  await Promise.race([
-    new Promise((resolve) => browser.once('exit', resolve)),
-    delay(1500)
-  ])
+  if (browser && browser.exitCode === null) {
+    await Promise.race([
+      new Promise((resolve) => browser.once('exit', resolve)),
+      delay(1500)
+    ])
+    if (browser.exitCode === null) browser.kill()
+  }
   if (!profile.startsWith(`${os.tmpdir()}${path.sep}notch-mobile-edge-`)) {
     throw new Error(`Refusing to remove unexpected browser profile: ${profile}`)
   }

@@ -26,7 +26,7 @@ interface Props {
 const THEMES: { id: ThemePreference; label: string }[] = [
   { id: 'dark', label: 'Dark' },
   { id: 'light', label: 'Light' },
-  { id: 'system', label: 'Follow Windows' }
+  { id: 'system', label: 'Follow system' }
 ]
 
 /** What each address is good for, in the user's terms rather than the OS's. */
@@ -77,14 +77,14 @@ export function Settings({
    * so this exposes the code nowhere the displayed digits had not already.
    */
   const pairingLink =
-    selected && mobile?.pairingCode
+    selected && mobile?.pairingCode && mobile.pairingExpiresAt > Date.now()
       ? `${selected.url}/#pair=${mobile.pairingCode}`
       : (selected?.url ?? '')
 
   const updatePosition = async (patch: Partial<NotchPosition>): Promise<void> => {
     setSaving(true)
     try {
-      const next = await window.notch.updateSettings({ position: { ...settings.position, ...patch } })
+      const next = await window.notch.updateSettings({ position: patch })
       onChange(next)
     } finally {
       setSaving(false)
@@ -92,7 +92,7 @@ export function Settings({
   }
 
   const displayOptions = useMemo(() => [
-    { value: '', title: 'Primary display', meta: 'Windows primary', kind: 'display' as const },
+    { value: '', title: 'Primary display', meta: 'System primary', kind: 'display' as const },
     ...displays.map((display) => {
       const [title, resolution = `${display.bounds.width}×${display.bounds.height}`] = display.label.split(' · ')
       return {
@@ -171,7 +171,7 @@ export function Settings({
       </div>
 
       <label className="toggle-row">
-        <span><strong>Launch at Windows sign-in</strong><small>Keeps the notch available after a restart.</small></span>
+        <span><strong>Launch at sign-in</strong><small>Keeps the notch available after a restart.</small></span>
         <input
           type="checkbox"
           checked={settings.launchAtLogin}

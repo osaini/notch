@@ -72,7 +72,10 @@ export class RemoteBridge implements Bridge {
     })
   }
 
-  subscribe(onSnapshot: (snapshot: Snapshot) => void): () => void {
+  subscribe(
+    onSnapshot: (snapshot: Snapshot) => void,
+    onDisconnect?: () => void
+  ): () => void {
     const events = new EventSource('/api/v1/events')
     const listener = (event: MessageEvent<string>): void => {
       onSnapshot(JSON.parse(event.data) as Snapshot)
@@ -81,6 +84,7 @@ export class RemoteBridge implements Bridge {
     events.addEventListener('error', () => {
       // EventSource reconnects automatically. The next successful snapshot
       // replaces any stale UI state.
+      onDisconnect?.()
     })
     return () => events.close()
   }

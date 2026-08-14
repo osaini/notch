@@ -3,6 +3,7 @@ import path from 'node:path'
 import type {
   AgentTuning,
   AppSettings,
+  AppSettingsPatch,
   ClaudeEffort,
   CodexEffort,
   ComboWorkflow,
@@ -82,6 +83,22 @@ function getPendingInteractions(): PendingInteraction[] {
 
 function clearFollowUp(sessionId: string): void {
   if (followUps.delete(sessionId)) pushInteractions()
+}
+
+function pruneFollowUps(snapshot: SessionsSnapshot): void {
+  // A failed scan is not authoritative; keep cards until session liveness can
+  // be established again instead of erasing a still-valid follow-up.
+  if (snapshot.error) return
+  const liveClaudeIds = new Set(
+    snapshot.sessions
+      .filter((session) => session.agent === 'claude')
+      .map((session) => session.sessionId)
+  )
+  let changed = false
+  for (const sessionId of followUps.keys()) {
+    if (!liveClaudeIds.has(sessionId)) changed = followUps.delete(sessionId) || changed
+  }
+  if (changed) pushInteractions()
 }
 
 async function captureFollowUp(event: HookEvent): Promise<void> {
@@ -247,6 +264,7 @@ function summarize(snapshot: SessionsSnapshot): string {
   if (counts.reviewing) parts.push(`${counts.reviewing} reviewing`)
   if (counts.busy) parts.push(`${counts.busy} working`)
   if (counts.idle) parts.push(`${counts.idle} idle`)
+  if (counts.unknown) parts.push(`${counts.unknown} unknown`)
   return parts.join(' · ')
 }
 
@@ -442,7 +460,7 @@ function registerIpc(): void {
   })
 
   ipcMain.handle('notch:getSettings', () => settingsStore?.get())
-  ipcMain.handle('notch:updateSettings', async (_event, patch: Partial<AppSettings>) => {
+  ipcMain.handle('notch:updateSettings', async (_event, patch: AppSettingsPatch) => {
     if (!settingsStore) throw new Error('Settings are not ready')
     const next = await settingsStore.update(patch)
     // `update` emits synchronously, so the bridge transition this patch caused
@@ -552,6 +570,11 @@ app.whenReady().then(async () => {
 
   registerIpc()
   notch.create()
+  notch.browserWindow?.on('close', (event) => {
+    if (quitting) return
+    event.preventDefault()
+    notch.peek()
+  })
   notch.applySettings(settings, false)
   notch.loadRenderer(process.env.ELECTRON_RENDERER_URL)
 
@@ -566,7 +589,10 @@ app.whenReady().then(async () => {
   })
   tray.create()
 
-  watcher.on('update', pushSessions)
+  watcher.on('update', (snapshot: SessionsSnapshot) => {
+    pruneFollowUps(snapshot)
+    pushSessions(snapshot)
+  })
   watcher.start()
   pushSessions(watcher.getSnapshot())
 

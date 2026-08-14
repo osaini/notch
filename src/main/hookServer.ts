@@ -221,7 +221,7 @@ export class HookServer extends EventEmitter {
   }
 
   stop(): void {
-    for (const id of [...this.pending.keys()]) this.finishInteraction(id, null)
+    for (const id of [...this.pending.keys()]) this.finishInteraction(id, null, 'shutdown')
     this.server?.close()
     this.server = null
     this.boundPort = null
@@ -353,7 +353,14 @@ export class HookServer extends EventEmitter {
       let payload: Record<string, unknown> = {}
       try {
         const text = Buffer.concat(chunks).toString('utf8')
-        if (text.trim()) payload = JSON.parse(text) as Record<string, unknown>
+        if (text.trim()) {
+          const parsed = JSON.parse(text) as unknown
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            this.sendJson(res, {})
+            return
+          }
+          payload = parsed as Record<string, unknown>
+        }
       } catch {
         this.sendJson(res, {})
         return
@@ -485,7 +492,11 @@ export class HookServer extends EventEmitter {
     this.emit('pending-change', this.getPendingInteractions())
   }
 
-  private finishInteraction(id: string, answer: InteractionResponse | null): boolean {
+  private finishInteraction(
+    id: string,
+    answer: InteractionResponse | null,
+    unansweredResult: 'timeout' | 'shutdown' = 'timeout'
+  ): boolean {
     const entry = this.pending.get(id)
     if (!entry) return false
     const { response, interaction, originalInput, capturedInput } = entry
@@ -564,7 +575,7 @@ export class HookServer extends EventEmitter {
 
     this.emit('interaction-resolved', {
       interaction,
-      result: answer ?? 'timeout'
+      result: answer ?? unansweredResult
     })
     this.emit('pending-change', this.getPendingInteractions())
     return true
