@@ -357,8 +357,13 @@ async function applyMobileBridgeSetting(settings: AppSettings): Promise<void> {
 let mobileBridgeWork: Promise<void> = Promise.resolve()
 
 function queueMobileBridgeSetting(settings: AppSettings): Promise<void> {
-  mobileBridgeWork = mobileBridgeWork.then(() => applyMobileBridgeSetting(settings))
-  return mobileBridgeWork
+  const operation = mobileBridgeWork.then(() => applyMobileBridgeSetting(settings))
+  // One failed transition must not poison every later toggle. The individual
+  // caller still receives the rejection; the shared queue heals itself.
+  mobileBridgeWork = operation.catch((error) => {
+    console.error('[mobile bridge] setting transition failed:', (error as Error).message)
+  })
+  return operation
 }
 
 async function toggleHooks(): Promise<HookInstallStatus> {
@@ -564,7 +569,11 @@ function registerIpc(): void {
       return
     }
     const landed = notch.handleDrag(candidate as NotchDragInput)
-    if (landed) void settingsStore.update({ position: landed })
+    if (landed) {
+      void settingsStore.update({ position: landed }).catch((error: unknown) => {
+        console.error('[settings] could not persist dragged position:', (error as Error).message)
+      })
+    }
   })
 
   ipcMain.on('notch:revealPath', (_event, target: unknown) => {
@@ -631,7 +640,11 @@ app.whenReady().then(async () => {
   notch.loadRenderer(process.env.ELECTRON_RENDERER_URL)
 
   tray = new NotchTray({
-    onToggleHooks: () => void toggleHooks(),
+    onToggleHooks: () => {
+      void toggleHooks().catch((error: unknown) => {
+        console.error('[hooks] tray toggle failed:', (error as Error).message)
+      })
+    },
     onOpenSettings: () => shell.showItemInFolder(SETTINGS_PATH),
     onRefreshUsage: () => void usageScanner?.refresh(),
     onQuit: () => {

@@ -268,7 +268,11 @@ export class NotchWindow {
 
     // Never navigate the overlay itself; open real links in the browser.
     win.webContents.setWindowOpenHandler(({ url }) => {
-      if (isExternallyOpenable(url)) void shell.openExternal(url)
+      if (isExternallyOpenable(url)) {
+        void shell.openExternal(url).catch((error: unknown) => {
+          console.error('[window] could not open external URL:', (error as Error).message)
+        })
+      }
       return { action: 'deny' }
     })
 
@@ -277,7 +281,11 @@ export class NotchWindow {
     win.webContents.on('will-navigate', (event, url) => {
       if (url === win.webContents.getURL()) return
       event.preventDefault()
-      if (isExternallyOpenable(url)) void shell.openExternal(url)
+      if (isExternallyOpenable(url)) {
+        void shell.openExternal(url).catch((error: unknown) => {
+          console.error('[window] could not open external URL:', (error as Error).message)
+        })
+      }
     })
 
     const onDisplayChange = (): void => this.reposition()
@@ -305,9 +313,13 @@ export class NotchWindow {
   loadRenderer(devServerUrl: string | undefined): void {
     if (!this.win) return
     if (devServerUrl) {
-      void this.win.loadURL(devServerUrl)
+      void this.win.loadURL(devServerUrl).catch((error: unknown) => {
+        console.error('[window] renderer URL failed to load:', (error as Error).message)
+      })
     } else {
-      void this.win.loadFile(join(__dirname, '../renderer/index.html'))
+      void this.win.loadFile(join(__dirname, '../renderer/index.html')).catch((error: unknown) => {
+        console.error('[window] renderer file failed to load:', (error as Error).message)
+      })
     }
   }
 

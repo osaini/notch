@@ -218,7 +218,7 @@ export class ClaudeTitleReader {
     } catch {
       return this.titles.get(file)?.title ?? ''
     } finally {
-      await handle.close()
+      await handle.close().catch(() => undefined)
     }
   }
 }

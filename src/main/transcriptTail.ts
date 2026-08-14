@@ -98,6 +98,6 @@ export async function readTrailingQuestion(transcriptPath: string): Promise<stri
   } catch {
     return ''
   } finally {
-    await handle.close()
+    await handle.close().catch(() => undefined)
   }
 }
