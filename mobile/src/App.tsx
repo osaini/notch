@@ -88,7 +88,12 @@ function Conversation({
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   const [loadingMessages, setLoadingMessages] = useState(true)
+  const optimisticMessages = useRef(new Set<string>())
   const pending = session.key.startsWith('pending:')
+
+  useEffect(() => {
+    optimisticMessages.current.clear()
+  }, [session.key])
 
   useEffect(() => {
     let cancelled = false
@@ -103,7 +108,20 @@ function Conversation({
       .getMessages(session.key)
       .then((next) => {
         if (!cancelled) {
-          setMessages(next)
+          setMessages((current) => {
+            const unmatched = current.filter((message) => optimisticMessages.current.has(message.id))
+            for (const persisted of next) {
+              if (persisted.role !== 'user') continue
+              const match = unmatched.findIndex((candidate) =>
+                candidate.text === persisted.text &&
+                Math.abs(candidate.createdAt - persisted.createdAt) <= 60_000
+              )
+              if (match < 0) continue
+              optimisticMessages.current.delete(unmatched[match].id)
+              unmatched.splice(match, 1)
+            }
+            return [...next, ...unmatched].sort((left, right) => left.createdAt - right.createdAt)
+          })
           setSendError('')
         }
       })
@@ -128,6 +146,7 @@ function Conversation({
     setSendError('')
     try {
       const message = await bridge.sendMessage(session.key, value)
+      optimisticMessages.current.add(message.id)
       setMessages((current) => [...current, message])
     } catch (error) {
       setText(value)
