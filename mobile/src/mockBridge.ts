@@ -16,8 +16,8 @@ const sessions: SessionSummary[] = [
     name: 'Mobile companion',
     project: 'windows-notch',
     path: 'C:\\Users\\you\\Projects\\windows-notch',
-    status: 'working',
-    detail: 'Building the mobile dashboard',
+    status: 'idle',
+    detail: 'Ready for a follow-up',
     updatedAt: now - 18_000,
     canMessage: true
   },

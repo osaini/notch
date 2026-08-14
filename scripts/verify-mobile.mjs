@@ -6,7 +6,7 @@ import path from 'node:path'
 const edge =
   process.env.EDGE_PATH ??
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-const targetUrl = process.env.NOTCH_MOBILE_URL ?? 'http://127.0.0.1:4174'
+const targetUrl = process.env.NOTCH_MOBILE_URL ?? 'http://127.0.0.1:4174/?demo=1'
 const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'notch-mobile-edge-'))
 const outputDir = path.resolve('mobile', 'artifacts')
 
