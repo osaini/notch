@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { buildArgs as buildClaudeArgs, extractStructured, READ_ONLY_TOOLS, WRITE_TOOLS } from '../lib/providers/claude.mjs';
 import { buildArgs as buildCodexArgs, extractJson } from '../lib/providers/codex.mjs';
+import { toProviderSchema } from '../lib/validate.mjs';
 import {
   assertReadOnlyArgs,
   assertWriteScopedArgs,
@@ -153,6 +154,17 @@ test('the recorded argv redacts the inline schema payload', () => {
   const recorded = redactArgs(claudeArgs, [{ value: schemaJson, placeholder: '<json-schema sha256:abc123>' }]);
   assert.ok(!recorded.includes(schemaJson));
   assert.ok(recorded.includes('<json-schema sha256:abc123>'));
+});
+
+test('provider schemas omit draft declarations unsupported by Claude structured output', () => {
+  const projected = toProviderSchema({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    properties: { value: { type: 'string', minLength: 1 } }
+  });
+  assert.equal(projected.$schema, undefined);
+  assert.equal(projected.properties.value.minLength, undefined);
+  assert.deepEqual(projected.required, ['value']);
 });
 
 test('claude structured output is read from the envelope, never invented', () => {

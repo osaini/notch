@@ -146,8 +146,9 @@ export function assertSubset(schema, path = '$') {
 
 /**
  * Provider structured-output modes accept a narrower schema dialect than
- * draft 2020-12: value constraints such as minLength/minItems/minimum are
- * rejected, and every declared property must appear in `required`.
+ * draft 2020-12: the draft declaration and value constraints such as
+ * minLength/minItems/minimum are rejected, and every declared property must
+ * appear in `required`.
  *
  * The canonical schema stays authoritative for our own validation; this
  * projection is only what gets handed to a CLI. Constraints removed here are
@@ -159,7 +160,14 @@ export function toProviderSchema(schema) {
 
   const output = {};
   for (const [key, value] of Object.entries(schema)) {
-    if (key === 'minLength' || key === 'minItems' || key === 'maxItems' || key === 'minimum' || key === 'maximum') {
+    if (
+      key === '$schema' ||
+      key === 'minLength' ||
+      key === 'minItems' ||
+      key === 'maxItems' ||
+      key === 'minimum' ||
+      key === 'maximum'
+    ) {
       continue;
     }
     if (key === 'properties') {
