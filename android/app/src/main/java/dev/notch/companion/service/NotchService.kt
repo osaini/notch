@@ -106,7 +106,7 @@ class NotchService : LifecycleService() {
             val resolved = announced - stillWaiting
             announced.removeAll(resolved)
             resolved.forEach {
-              NotificationManagerCompat.from(this@NotchService).cancel(it.hashCode())
+              NotificationManagerCompat.from(this@NotchService).cancel(it, ALERT_ID)
             }
           }
 
@@ -206,7 +206,10 @@ class NotchService : LifecycleService() {
         PackageManager.PERMISSION_GRANTED
     ) return false
     return runCatching {
-      NotificationManagerCompat.from(this).notify(key.hashCode(), notification)
+      // The full session key is the notification tag. A plain String.hashCode
+      // can collide with another session or with ONGOING_ID, replacing the
+      // foreground-service notification Android requires us to retain.
+      NotificationManagerCompat.from(this).notify(key, ALERT_ID, notification)
       true
     }.getOrDefault(false)
   }
@@ -215,6 +218,7 @@ class NotchService : LifecycleService() {
     private const val CHANNEL_ONGOING = "notch.connection"
     private const val CHANNEL_ALERTS = "notch.alerts"
     private const val ONGOING_ID = 1
+    private const val ALERT_ID = 2
 
     fun start(context: Context) {
       val intent = Intent(context, NotchService::class.java)
