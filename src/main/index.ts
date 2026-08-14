@@ -1,7 +1,10 @@
 import { app, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
 import path from 'node:path'
 import type {
+  AgentTuning,
   AppSettings,
+  ClaudeEffort,
+  CodexEffort,
   ComboWorkflow,
   DispatchRequest,
   DispatchResult,
@@ -30,6 +33,7 @@ import {
 import { UsageScanner, emptySnapshot } from './usage'
 import { dispatch, getRecentProjects } from './dispatcher'
 import { getAgentVersions } from './agentVersions'
+import { pastedImagesDir, savePastedImage } from './pastedImages'
 import { NotchWindow } from './windows'
 import { NotchTray } from './tray'
 import { SettingsStore } from './settings'
@@ -123,18 +127,55 @@ const DISPATCH_TARGETS = new Set<DispatchTarget>([
   'claude-codex'
 ])
 const PERMISSION_MODES = new Set<PermissionMode>([
-  'default',
+  'manual',
+  'auto',
   'acceptEdits',
   'plan',
   'bypassPermissions',
+  'dontAsk',
   'codex-untrusted',
   'codex-on-request',
   'codex-never',
   'codex-bypass'
 ])
 const COMBO_WORKFLOWS = new Set<ComboWorkflow>(['bug-search', 'adversarial'])
+const CLAUDE_EFFORTS = new Set<string>(['low', 'medium', 'high', 'xhigh', 'max'])
+const CODEX_EFFORTS = new Set<string>(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
+/**
+ * A model id becomes an argv element, so it is matched against a charset rather
+ * than an allow-list of names — the CLIs ship new ids faster than this app does.
+ * The leading character may not be `-`, which is what keeps a model id from
+ * being read as another flag by the agent or by the terminal launcher.
+ */
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$/
 const MAX_PROMPT_CHARS = 100_000
 const MAX_ATTACHMENTS = 32
+
+/**
+ * Shape-checks one agent's model/effort override.
+ *
+ * Returns `undefined` when the caller sent nothing, or `null` when it sent
+ * something malformed — the caller rejects the whole request on `null` rather
+ * than silently dropping a setting the user asked for.
+ */
+function parseTuning<E extends string>(
+  raw: unknown,
+  efforts: ReadonlySet<string>
+): AgentTuning<E> | null | undefined {
+  if (raw === undefined) return undefined
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const value = raw as Record<string, unknown>
+  const tuning: AgentTuning<E> = {}
+  if (value.model !== undefined && value.model !== '') {
+    if (typeof value.model !== 'string' || !MODEL_ID.test(value.model)) return null
+    tuning.model = value.model
+  }
+  if (value.effort !== undefined && value.effort !== '') {
+    if (typeof value.effort !== 'string' || !efforts.has(value.effort)) return null
+    tuning.effort = value.effort as E
+  }
+  return tuning
+}
 
 /**
  * The renderer is the only caller today, but this payload decides which binary
@@ -160,13 +201,19 @@ function parseDispatchRequest(raw: unknown): DispatchRequest | null {
     }
     attachments = value.attachments as string[]
   }
+  const claude = parseTuning<ClaudeEffort>(value.claude, CLAUDE_EFFORTS)
+  if (claude === null) return null
+  const codex = parseTuning<CodexEffort>(value.codex, CODEX_EFFORTS)
+  if (codex === null) return null
   return {
     agent: value.agent as DispatchTarget,
     cwd: value.cwd,
     prompt: value.prompt,
     permissionMode: value.permissionMode as PermissionMode,
     comboWorkflow: value.comboWorkflow as ComboWorkflow | undefined,
-    attachments
+    attachments,
+    claude,
+    codex
   }
 }
 
@@ -330,6 +377,11 @@ function registerIpc(): void {
 
   ipcMain.handle('notch:getRecentProjects', () => getRecentProjects(watcher.getSnapshot().sessions))
   ipcMain.handle('notch:getAgentVersions', () => getAgentVersions())
+  // Deliberately does not start the app server: an idle service returns an
+  // empty list and the picker falls back to its static ids.
+  ipcMain.handle('notch:getCodexModels', async () =>
+    (await managedCodex.listModels()).map((model) => model.id)
+  )
   ipcMain.handle('notch:browseFiles', async () => {
     const options: Electron.OpenDialogOptions = {
       title: 'Add files to the tray',
@@ -341,6 +393,18 @@ function registerIpc(): void {
       ? await dialog.showOpenDialog(parent, options)
       : await dialog.showOpenDialog(options)
     return result.canceled ? [] : result.filePaths
+  })
+  ipcMain.handle('notch:savePastedImage', async (_event, bytes: unknown) => {
+    // The bytes come from the OS clipboard by way of the renderer, so nothing
+    // about them is trusted here: `savePastedImage` names the file from what
+    // they actually are, and refuses them outright if it cannot.
+    if (!(bytes instanceof Uint8Array)) return null
+    try {
+      return await savePastedImage(pastedImagesDir(), bytes)
+    } catch (err) {
+      console.error('[notch] could not save pasted image', err)
+      return null
+    }
   })
   ipcMain.handle('notch:browseDirectory', async (_event, initialPath: unknown) => {
     const options: Electron.OpenDialogOptions = {
@@ -395,10 +459,13 @@ function registerIpc(): void {
   )
   ipcMain.handle('notch:getDisplays', () => notch.getDisplays())
   ipcMain.handle('notch:getDragState', () => notch.getDragState())
-  ipcMain.handle('notch:getMobileBridgeStatus', () => mobileBridge?.getStatus() ?? {
+  // refreshStatus rather than getStatus: this is the call the Settings tab makes,
+  // and the address a phone should use changes when the user joins a different
+  // network. Re-probing here keeps the recommendation and the QR code honest.
+  ipcMain.handle('notch:getMobileBridgeStatus', async () => mobileBridge?.refreshStatus() ?? {
     running: false,
     port: null,
-    urls: [],
+    endpoints: [],
     pairingCode: '',
     pairingExpiresAt: 0,
     pairedDevices: 0,

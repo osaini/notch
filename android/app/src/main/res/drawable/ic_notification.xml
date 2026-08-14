@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Status-bar icons are masked to a single colour, so this is the notch
+  silhouette only — the clay dot from the launcher icon would vanish into the
+  same flat white and just muddy the shape.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp"
+  android:height="24dp"
+  android:viewportWidth="512"
+  android:viewportHeight="512"
+  android:tint="#FFFFFF">
+  <path
+    android:fillColor="#FFFFFF"
+    android:pathData="M56,144h128c14,0 24,10 24,24v20c0,28 20,48 48,48s48,-20 48,-48v-20c0,-14 10,-24 24,-24h128v64H354c-8,0 -14,6 -14,14 0,54 -36,90 -84,90s-84,-36 -84,-90c0,-8 -6,-14 -14,-14H56v-64Z" />
+</vector>

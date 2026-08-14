@@ -4,12 +4,15 @@ import type {
   DisplayOption,
   HookInstallStatus,
   MobileBridgeStatus,
+  MobileEndpoint,
+  MobileEndpointKind,
   NotchPosition,
   NotchPositionPreset,
   ThemePreference
 } from '@shared/types'
 import { NOTCH_POSITION_PRESETS } from '@shared/types'
 import { Listbox } from '../components/Listbox'
+import { QrCode } from '../components/QrCode'
 import { durationUntil } from '../format'
 import { usePlatform } from '../platform'
 
@@ -25,6 +28,14 @@ const THEMES: { id: ThemePreference; label: string }[] = [
   { id: 'light', label: 'Light' },
   { id: 'system', label: 'Follow Windows' }
 ]
+
+/** What each address is good for, in the user's terms rather than the OS's. */
+const ENDPOINT_HINT: Record<MobileEndpointKind, string> = {
+  lan: 'Same Wi-Fi',
+  vpn: 'Over VPN',
+  other: 'Other network',
+  loopback: 'Will not work from a phone'
+}
 
 const GRID: (NotchPositionPreset | null)[] = [
   findPreset('top', 0), findPreset('top', 0.5), findPreset('top', 1),
@@ -42,11 +53,33 @@ export function Settings({
   const [displays, setDisplays] = useState<DisplayOption[]>([])
   const [saving, setSaving] = useState(false)
   const [mobile, setMobile] = useState<MobileBridgeStatus | null>(null)
+  /** Which endpoint the QR encodes. Null follows the bridge's recommendation. */
+  const [chosenUrl, setChosenUrl] = useState<string | null>(null)
 
   useEffect(() => {
     void window.notch.getDisplays().then(setDisplays)
     void window.notch.getMobileBridgeStatus().then(setMobile)
+    // The pairing code is one-shot and short-lived: it is replaced the instant a
+    // phone consumes it. Without this subscription the tab keeps showing a code
+    // that has already stopped working.
+    return window.notch.onMobileStatus(setMobile)
   }, [])
+
+  const endpoints = mobile?.endpoints ?? []
+  const selected: MobileEndpoint | undefined =
+    endpoints.find((endpoint) => endpoint.url === chosenUrl) ??
+    endpoints.find((endpoint) => endpoint.recommended) ??
+    endpoints[0]
+
+  /**
+   * The pairing code rides in the fragment so a scan lands on a pre-filled form
+   * and the user types nothing at all. A fragment is never sent to the server,
+   * so this exposes the code nowhere the displayed digits had not already.
+   */
+  const pairingLink =
+    selected && mobile?.pairingCode
+      ? `${selected.url}/#pair=${mobile.pairingCode}`
+      : (selected?.url ?? '')
 
   const updatePosition = async (patch: Partial<NotchPosition>): Promise<void> => {
     setSaving(true)
@@ -191,31 +224,64 @@ export function Settings({
         ) : (
           <>
             {mobile?.error && <div className="notice error">{mobile.error}</div>}
-            {mobile?.urls.map((url) => (
-              <div key={url} className="mobile-url" title={url}>
-                <span>{url}</span>
-                <button type="button" onClick={() => void navigator.clipboard.writeText(url)}>Copy</button>
+
+            <div className="pairing-scan">
+              <QrCode value={pairingLink} />
+              <div className="pairing-scan-copy">
+                <div className="field-label">Scan with your phone's camera</div>
+                <p className="muted xsmall">
+                  Opens the companion and fills in the code. Your phone must be on the
+                  same Wi-Fi as this computer.
+                </p>
+                <div className="pairing-code">
+                  {(mobile?.pairingCode || '------').split('').map((digit, index) => (
+                    <span key={index}>{digit}</span>
+                  ))}
+                </div>
+                <div className="muted xsmall">
+                  Expires in {durationUntil(mobile?.pairingExpiresAt ?? null)} ·{' '}
+                  {mobile?.pairedDevices ?? 0} paired device(s)
+                </div>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!mobile}
+                  onClick={() => void window.notch.regenerateMobilePairing().then(setMobile)}
+                >
+                  New code
+                </button>
+              </div>
+            </div>
+
+            <div className="field-label">Or type this address into your phone's browser</div>
+            {endpoints.map((endpoint) => (
+              <div
+                key={endpoint.url}
+                className={`mobile-url${endpoint.url === selected?.url ? ' selected' : ''} kind-${endpoint.kind}`}
+              >
+                <button
+                  type="button"
+                  className="mobile-url-pick"
+                  title={`${endpoint.label} — ${ENDPOINT_HINT[endpoint.kind]}`}
+                  aria-pressed={endpoint.url === selected?.url}
+                  onClick={() => setChosenUrl(endpoint.url)}
+                >
+                  <span className="mobile-url-address">{endpoint.url}</span>
+                  <span className="mobile-url-hint">
+                    {endpoint.recommended ? 'Recommended' : ENDPOINT_HINT[endpoint.kind]}
+                  </span>
+                </button>
+                <button type="button" onClick={() => void navigator.clipboard.writeText(endpoint.url)}>
+                  Copy
+                </button>
               </div>
             ))}
-            <div className="pairing-row">
-              <div>
-                <div className="field-label">Pairing code</div>
-                <div className="pairing-code">
-                  {(mobile?.pairingCode || '------').split('').map((digit, index) => <span key={index}>{digit}</span>)}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="btn"
-                disabled={!mobile}
-                onClick={() => void window.notch.regenerateMobilePairing().then(setMobile)}
-              >
-                New code
-              </button>
-            </div>
-            <div className="muted xsmall">
-              Expires in {durationUntil(mobile?.pairingExpiresAt ?? null)} · {mobile?.pairedDevices ?? 0} paired device(s)
-            </div>
+            {mobile?.running && endpoints.length <= 1 && (
+              <p className="security-note">
+                This computer has no network address a phone could reach. Connect it to
+                Wi-Fi or Ethernet, then reopen this tab.
+              </p>
+            )}
             {Boolean(mobile?.pairedDevices) && (
               <button type="button" className="link danger-link" onClick={() => void window.notch.clearMobileDevices().then(setMobile)}>
                 Unpair all phones

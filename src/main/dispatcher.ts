@@ -8,27 +8,64 @@ import type {
   SessionState
 } from '@shared/types'
 import { buildImplementerPrompt, buildReviewerPrompt } from './comboPrompts'
+import { AGENT_PATHS } from './agentPaths'
 import type { ManagedCodexService } from './managedCodex'
 import { platform } from './platform'
 import { runFirstWorkingPlan } from './platform/launch'
 import type { LaunchPlan, TerminalRunRequest } from './platform/types'
 
 const CLAUDE_MODES: PermissionMode[] = [
-  'default',
+  'manual',
+  'auto',
   'acceptEdits',
   'plan',
-  'bypassPermissions'
+  'bypassPermissions',
+  'dontAsk'
 ]
+
+/**
+ * The mode the pair's implementer runs under when the request names one that
+ * Claude cannot use. `auto` clears its own approvals behind a safety
+ * classifier, which is what makes an unattended implementer useful.
+ */
+export const IMPLEMENTER_MODE: PermissionMode = 'auto'
+
+/** Where `auto` is turned off, the implementer lands here instead. */
+export const IMPLEMENTER_FALLBACK_MODE: PermissionMode = 'acceptEdits'
+
+/**
+ * True when any Claude settings file switches `auto` off.
+ *
+ * Claude Code refuses to start under `--permission-mode auto` once
+ * `permissions.disableAutoMode` is set, so a dispatch that assumed `auto`
+ * would fail in the terminal with nothing useful shown here. Reading the flag
+ * lets the launch degrade to `acceptEdits` instead of not launching at all.
+ */
+export function isAutoModeDisabled(settings: unknown): boolean {
+  if (!settings || typeof settings !== 'object') return false
+  const permissions = (settings as { permissions?: unknown }).permissions
+  if (!permissions || typeof permissions !== 'object') return false
+  return (permissions as { disableAutoMode?: unknown }).disableAutoMode === 'disable'
+}
+
+/** Downgrades `auto` to something launchable when the mode is switched off. */
+export function resolveClaudeMode(
+  mode: PermissionMode,
+  autoDisabled: boolean
+): PermissionMode {
+  return mode === 'auto' && autoDisabled ? IMPLEMENTER_FALLBACK_MODE : mode
+}
 
 export function buildClaudeArgs(req: DispatchRequest): string[] {
   const args: string[] = []
   if (
     req.permissionMode &&
-    CLAUDE_MODES.includes(req.permissionMode) &&
-    req.permissionMode !== 'default'
+    CLAUDE_MODES.includes(req.permissionMode)
   ) {
     args.push('--permission-mode', req.permissionMode)
   }
+  if (req.claude?.model) args.push('--model', req.claude.model)
+  if (req.claude?.effort) args.push('--effort', req.claude.effort)
   const prompt = composePrompt(req)
   if (prompt) args.push(prompt)
   return args
@@ -58,6 +95,11 @@ export function buildCodexArgs(
       args.push('--ask-for-approval', 'on-request')
       break
   }
+  if (req.codex?.model) args.push('--model', req.codex.model)
+  // Codex has no effort flag; the level is a config override. The value is
+  // parsed as TOML, so it is quoted to land as a string rather than relying on
+  // the parser's raw-literal fallback.
+  if (req.codex?.effort) args.push('-c', `model_reasoning_effort="${req.codex.effort}"`)
   const prompt = composePrompt(req)
   if (prompt) args.push(prompt)
   return args
@@ -93,20 +135,29 @@ export function buildBugSearchRequest(cwd: string): TerminalRunRequest {
  * Role-split argv for the adversarial pair.
  *
  * The implementer honours whichever Claude permission mode was chosen, falling
- * back to `acceptEdits`. The reviewer is pinned to a read-only sandbox and is
+ * back to `auto`. The reviewer is pinned to a read-only sandbox and is
  * never allowed to request command approval. Both settings are deliberately not
  * configurable: the sandbox makes `never` safe, and a reviewer that can edit
  * the tree it is reviewing has stopped being a reviewer.
+ *
+ * Model and effort are not safety properties, so each half keeps its own: the
+ * request carries them under `claude` and `codex`, and spreading `req` into the
+ * two builders below routes each to the agent it names.
  */
-export function buildAdversarialArgs(req: DispatchRequest): {
+export function buildAdversarialArgs(
+  req: DispatchRequest,
+  options: { autoDisabled?: boolean } = {}
+): {
   claudeArgs: string[]
   codexArgs: string[]
 } {
   const task = composePrompt(req)
-  const implementerMode =
+  const implementerMode = resolveClaudeMode(
     req.permissionMode && CLAUDE_MODES.includes(req.permissionMode)
       ? req.permissionMode
-      : 'acceptEdits'
+      : IMPLEMENTER_MODE,
+    options.autoDisabled ?? false
+  )
   return {
     claudeArgs: buildClaudeArgs({
       ...req,
@@ -161,6 +212,36 @@ async function isDirectory(dir: string): Promise<boolean> {
 }
 
 /**
+ * Whether this machine has `auto` switched off, read fresh per dispatch.
+ *
+ * Unreadable or unparseable settings mean "not disabled": the mode is on by
+ * default, so guessing otherwise would downgrade launches for no reason.
+ */
+export async function autoModeDisabled(
+  cwd: string,
+  claudeRoot = AGENT_PATHS.claudeRoot
+): Promise<boolean> {
+  // Claude merges user settings with both checked-in and local project
+  // settings. Any layer can prohibit auto mode, and the selected project is
+  // exactly the directory the dispatched CLI will load them from.
+  const files = [
+    path.join(claudeRoot, 'settings.json'),
+    path.join(cwd, '.claude', 'settings.json'),
+    path.join(cwd, '.claude', 'settings.local.json')
+  ]
+  for (const file of files) {
+    try {
+      const text = await fsp.readFile(file, 'utf8')
+      if (isAutoModeDisabled(JSON.parse(text))) return true
+    } catch {
+      // Missing and malformed layers do not erase a valid setting in another
+      // layer. Keep looking before falling back to Claude's default.
+    }
+  }
+  return false
+}
+
+/**
  * Spawns a detached agent session in its own terminal window.
  *
  * Args are passed as an array, never as a shell string, so prompts containing
@@ -205,7 +286,15 @@ export async function dispatch(
       console.warn('[managed codex] falling back to CLI:', (error as Error).message)
     }
   }
-  const agentArgs = agent === 'codex' ? buildCodexArgs(req) : buildClaudeArgs(req)
+  if (agent === 'codex') {
+    return runPlans(
+      platform.terminal.agentPlans({ cwd, exe: agent, args: buildCodexArgs(req) })
+    )
+  }
+  // Only Claude has a mode that the machine can refuse, so only Claude pays for
+  // the settings read.
+  const permissionMode = resolveClaudeMode(req.permissionMode, await autoModeDisabled(cwd))
+  const agentArgs = buildClaudeArgs({ ...req, permissionMode })
   return runPlans(platform.terminal.agentPlans({ cwd, exe: agent, args: agentArgs }))
 }
 
@@ -236,7 +325,9 @@ async function dispatchCombo(req: DispatchRequest, cwd: string): Promise<Dispatc
     return runPlans(platform.terminal.agentPlans(buildBugSearchRequest(cwd)))
   }
 
-  const { claudeArgs, codexArgs } = buildAdversarialArgs(req)
+  const { claudeArgs, codexArgs } = buildAdversarialArgs(req, {
+    autoDisabled: await autoModeDisabled(cwd)
+  })
   return runPlans(
     platform.terminal.pairPlans(
       { cwd, exe: 'claude', args: claudeArgs },

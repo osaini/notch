@@ -6,8 +6,12 @@ JavaScript.
 
 ## Pairing and transport
 
-1. The desktop Settings tab shows private-network URLs and a short-lived six-digit pairing code.
-2. The phone opens that URL and posts the code plus a user-visible device name.
+1. The desktop Settings tab shows a QR code, plus the reachable private-network URLs ranked
+   best-first, and a short-lived six-digit pairing code.
+2. The phone opens that URL and posts the code plus a user-visible device name. The QR encodes
+   `<url>/#pair=<code>`; the client reads the code out of the fragment, pre-fills the form and
+   strips the fragment. A fragment is never transmitted, so the code still only ever reaches the
+   server in the `POST /api/v1/pair` body.
 3. The bridge sets a random, revocable, HttpOnly, SameSite=Strict session cookie.
 4. All API and server-sent-event requests require that cookie.
 5. The server listens on port `47822` (walking forward if occupied). It is never unauthenticated:

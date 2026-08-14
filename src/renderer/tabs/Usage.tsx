@@ -14,6 +14,22 @@ function planStateLabel(plan: PlanUsage): string {
   return plan.source === 'transcript' ? 'transcript fallback' : 'stale cache'
 }
 
+function heatLevel(tokens: number, peak: number): number {
+  if (tokens <= 0 || peak <= 0) return 0
+  const ratio = tokens / peak
+  if (ratio >= 0.6) return 4
+  if (ratio >= 0.25) return 3
+  if (ratio >= 0.08) return 2
+  return 1
+}
+
+function hourLabel(hour: number | null): string {
+  if (hour === null) return '—'
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(
+    new Date(2000, 0, 1, hour)
+  )
+}
+
 export function Usage({ usage, onRefresh }: Props): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [refreshNote, setRefreshNote] = useState<string | null>(null)
@@ -43,6 +59,9 @@ export function Usage({ usage, onRefresh }: Props): React.JSX.Element {
     }))
   )
   const unavailablePlans = usage.planUsage.filter((plan) => plan.periods.length === 0)
+  const peakDayTokens = Math.max(0, ...usage.days.map((day) => day.tokens))
+  const topModels = usage.modelBreakdown.slice(0, 5)
+  const topModelTokens = Math.max(0, ...topModels.map((model) => model.tokens))
 
   return (
     <div className="tab-pane usage-pane">
@@ -60,6 +79,41 @@ export function Usage({ usage, onRefresh }: Props): React.JSX.Element {
           <span>Active days <b>{groupedNumber(usage.activeDays)}</b></span>
           <span>In / out <b>{compactTokens(usage.inputTokens)} / {compactTokens(usage.outputTokens)}</b></span>
           <span>Cache r/w <b>{compactTokens(usage.cacheReadTokens)} / {compactTokens(usage.cacheCreationTokens)}</b></span>
+        </div>
+      </section>
+
+      <div className="section-rule"><span>Activity</span><i /><em>last 182 days</em></div>
+      <section className="usage-insights">
+        <div className="activity-card">
+          <div
+            className="usage-heatmap"
+            role="img"
+            aria-label={`${usage.activeDays} active days; current streak ${usage.currentStreak} days`}
+          >
+            {usage.days.map((day) => (
+              <span
+                className={`heat-${heatLevel(day.tokens, peakDayTokens)}`}
+                key={day.date}
+                title={`${day.date}: ${groupedNumber(day.tokens)} tokens · ${groupedNumber(day.messages)} requests`}
+              />
+            ))}
+          </div>
+          <div className="activity-stats">
+            <span>Current <b>{usage.currentStreak}d</b></span>
+            <span>Longest <b>{usage.longestStreak}d</b></span>
+            <span>Peak hour <b>{hourLabel(usage.peakHour)}</b></span>
+          </div>
+        </div>
+        <div className="model-card">
+          <span className="usage-eyebrow">Top models</span>
+          {topModels.map((model) => (
+            <div className="model-row" key={model.model} title={model.model}>
+              <span>{model.model}</span>
+              <i><em style={{ width: `${topModelTokens ? (model.tokens / topModelTokens) * 100 : 0}%` }} /></i>
+              <b>{compactTokens(model.tokens)}</b>
+            </div>
+          ))}
+          {topModels.length === 0 && <small>No model data yet.</small>}
         </div>
       </section>
 

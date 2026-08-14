@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto'
+import { createSocket } from 'node:dgram'
 import { EventEmitter } from 'node:events'
 import fsp from 'node:fs/promises'
 import http from 'node:http'
@@ -10,11 +11,12 @@ import type {
   DispatchRequest,
   DispatchResult,
   MobileBridgeStatus,
+  MobileEndpoint,
+  MobileEndpointKind,
   SessionState
 } from '@shared/types'
-import { findTranscript } from './claudeTranscript'
+import { findTranscriptInRoots } from './claudeTranscript'
 import type { SessionWatcher } from './sessionWatcher'
-import { PROJECTS_DIR } from './usage'
 
 const DEFAULT_MOBILE_PORT = 47822
 const PORT_ATTEMPTS = 12
@@ -35,6 +37,87 @@ const PAIRING_ATTEMPT_LIMIT = 8
  * space stays out of reach for the lifetime of any one code.
  */
 const PAIRING_GLOBAL_ATTEMPT_LIMIT = 24
+
+/**
+ * What Windows assigns to an adapter whose DHCP failed — a Bluetooth PAN, an
+ * unplugged dock, a disabled virtual switch. A machine collects several, none
+ * of them route anywhere, and listing them buries the one address that works.
+ */
+function isLinkLocal(address: string): boolean {
+  return address.startsWith('169.254.')
+}
+
+/** RFC1918 — the ranges a home or office LAN actually hands out. */
+function isPrivateLan(address: string): boolean {
+  if (address.startsWith('192.168.') || address.startsWith('10.')) return true
+  const match = /^172\.(\d+)\./.exec(address)
+  return match ? Number(match[1]) >= 16 && Number(match[1]) <= 31 : false
+}
+
+/**
+ * RFC6598 carrier-grade NAT, which Tailscale and similar overlays allocate
+ * from. A phone can reach these, but only once it has joined the same overlay,
+ * so they rank below a plain LAN address instead of being hidden.
+ */
+function isCarrierGradeNat(address: string): boolean {
+  const match = /^100\.(\d+)\./.exec(address)
+  return match ? Number(match[1]) >= 64 && Number(match[1]) <= 127 : false
+}
+
+function endpointKind(address: string): MobileEndpointKind {
+  if (isPrivateLan(address)) return 'lan'
+  if (isCarrierGradeNat(address)) return 'vpn'
+  return 'other'
+}
+
+const KIND_RANK: Record<MobileEndpointKind, number> = {
+  lan: 0,
+  vpn: 1,
+  other: 2,
+  loopback: 3
+}
+
+/**
+ * The source address the routing table would use to leave this machine.
+ *
+ * `networkInterfaces()` cannot distinguish a live Wi-Fi adapter from an
+ * Ethernet port that still holds a stale lease — both report a perfectly
+ * ordinary private address — so the only way to know which one traffic
+ * actually takes is to ask the kernel. Connecting a UDP socket transmits
+ * nothing; it resolves the route and binds a source address, which is why this
+ * needs no reachable peer and produces no network traffic.
+ */
+function probePreferredAddress(): Promise<string | null> {
+  return new Promise((resolve) => {
+    let socket: ReturnType<typeof createSocket> | null = null
+    const finish = (address: string | null): void => {
+      try {
+        socket?.close()
+      } catch {
+        // Already closing, or never opened.
+      }
+      socket = null
+      resolve(address)
+    }
+    try {
+      socket = createSocket('udp4')
+      socket.once('error', () => finish(null))
+      // TEST-NET-1: permanently unassigned and unroutable, so the lookup falls
+      // to the default route without implying this machine talks to anyone.
+      socket.connect(9, '192.0.2.1', () => {
+        let address: string | null = null
+        try {
+          address = socket?.address().address ?? null
+        } catch {
+          address = null
+        }
+        finish(address)
+      })
+    } catch {
+      finish(null)
+    }
+  })
+}
 
 type MobileStatus = 'working' | 'idle' | 'needs-input' | 'reviewing'
 
@@ -183,9 +266,23 @@ function mimeType(file: string): string {
 function cookieValue(req: http.IncomingMessage, name: string): string {
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const [key, ...rest] = part.trim().split('=')
-    if (key === name) return decodeURIComponent(rest.join('='))
+    if (key === name) {
+      try {
+        return decodeURIComponent(rest.join('='))
+      } catch {
+        // A malformed cookie is simply not a credential. Treating it as a 500
+        // lets any LAN caller manufacture noisy server failures at will.
+        return ''
+      }
+    }
   }
   return ''
+}
+
+/** True only for plain-HTTP address ranges this bridge is safe to advertise. */
+export function isSafeMobileEndpointAddress(address: string): boolean {
+  const kind = endpointKind(address)
+  return !isLinkLocal(address) && (kind === 'lan' || kind === 'vpn')
 }
 
 function responseItemText(content: unknown): string {
@@ -292,6 +389,8 @@ export class MobileBridge extends EventEmitter {
   private lastError: string | undefined
   private broadcastQueued = false
   private watcherListener: (() => void) | null = null
+  /** Cached result of the last routing probe. See probePreferredAddress(). */
+  private preferredAddress: string | null = null
 
   constructor(private readonly options: MobileBridgeOptions) {
     super()
@@ -320,6 +419,9 @@ export class MobileBridge extends EventEmitter {
         this.heartbeat = setInterval(() => {
           for (const client of this.clients) client.write(': heartbeat\n\n')
         }, HEARTBEAT_MS)
+        // Before the first status goes out, so the Settings tab never shows an
+        // unranked list on the one render the user is most likely to act on.
+        this.preferredAddress = await probePreferredAddress()
         this.emit('status', this.getStatus())
         return port
       } catch (error) {
@@ -344,24 +446,64 @@ export class MobileBridge extends EventEmitter {
     this.boundPort = null
   }
 
-  getStatus(): MobileBridgeStatus {
+  /**
+   * Re-probes the routing table before reporting. The Settings tab uses this,
+   * because the right address changes the moment the user joins a different
+   * network; the push path stays on the cached value so a status broadcast
+   * never waits on a socket.
+   */
+  async refreshStatus(): Promise<MobileBridgeStatus> {
+    this.preferredAddress = await probePreferredAddress()
+    return this.getStatus()
+  }
+
+  /**
+   * Every address a phone could reach, best first, with loopback last and
+   * labelled. The failure this ordering exists to prevent is a user copying
+   * `http://localhost` — or a Bluetooth adapter's link-local address — onto a
+   * phone, getting nothing, and concluding the companion is broken.
+   */
+  private endpoints(): MobileEndpoint[] {
     const port = this.boundPort
-    const urls: string[] = []
-    if (port) {
-      urls.push(`http://localhost:${port}`)
-      const interfaces = networkInterfaces()
-      for (const entries of Object.values(interfaces)) {
-        for (const entry of entries ?? []) {
-          if (entry.family === 'IPv4' && !entry.internal) {
-            urls.push(`http://${entry.address}:${port}`)
-          }
-        }
+    if (!port) return []
+    const byUrl = new Map<string, MobileEndpoint>()
+    for (const [label, entries] of Object.entries(networkInterfaces())) {
+      for (const entry of entries ?? []) {
+        if (entry.family !== 'IPv4' || entry.internal) continue
+        if (!isSafeMobileEndpointAddress(entry.address)) continue
+        const kind = endpointKind(entry.address)
+        // This service is intentionally plain HTTP and grants paired clients
+        // unattended execution. Never advertise a public interface as a phone
+        // endpoint, even if the OS happens to assign one directly.
+        const url = `http://${entry.address}:${port}`
+        if (byUrl.has(url)) continue
+        byUrl.set(url, {
+          url,
+          label,
+          kind,
+          recommended: entry.address === this.preferredAddress
+        })
       }
     }
+    const endpoints = [...byUrl.values()].sort((a, b) => {
+      if (a.recommended !== b.recommended) return a.recommended ? -1 : 1
+      const rank = KIND_RANK[a.kind] - KIND_RANK[b.kind]
+      return rank !== 0 ? rank : a.url.localeCompare(b.url)
+    })
+    endpoints.push({
+      url: `http://localhost:${port}`,
+      label: 'This computer only',
+      kind: 'loopback',
+      recommended: false
+    })
+    return endpoints
+  }
+
+  getStatus(): MobileBridgeStatus {
     return {
-      running: Boolean(this.server && port),
-      port,
-      urls: [...new Set(urls)],
+      running: Boolean(this.server && this.boundPort),
+      port: this.boundPort,
+      endpoints: this.endpoints(),
       pairingCode: this.pairingCode,
       pairingExpiresAt: this.pairingExpiresAt,
       pairedDevices: this.devices.filter(
@@ -386,7 +528,6 @@ export class MobileBridge extends EventEmitter {
     for (const client of this.clients) client.end()
     this.clients.clear()
     const status = this.regeneratePairing()
-    this.emit('status', status)
     return status
   }
 
@@ -636,7 +777,7 @@ export class MobileBridge extends EventEmitter {
     const session = this.sessionFor(key)
     let transcript = session.transcriptPath || this.transcriptCache.get(key)
     if (!transcript && session.agent === 'claude') {
-      transcript = await findTranscript(PROJECTS_DIR, session.sessionId) ?? undefined
+      transcript = await findTranscriptInRoots(session.sessionId) ?? undefined
       if (transcript) this.transcriptCache.set(key, transcript)
     }
     if (!transcript) return []
@@ -716,7 +857,10 @@ export class MobileBridge extends EventEmitter {
   }
 
   private async dispatchFromPhone(body: Record<string, unknown>): Promise<MobileSessionSummary> {
-    const agent: AgentKind = body.agent === 'codex' ? 'codex' : 'claude'
+    if (body.agent !== 'claude' && body.agent !== 'codex') {
+      throw new HttpError(400, 'Choose Claude or Codex.')
+    }
+    const agent: AgentKind = body.agent
     const cwd = stringValue(body.cwd).trim()
     const prompt = stringValue(body.prompt).trim()
     if (!cwd || !prompt) throw new HttpError(400, 'Choose a project and enter a prompt.')
@@ -798,7 +942,11 @@ export class MobileBridge extends EventEmitter {
     this.broadcastQueued = true
     queueMicrotask(() => {
       this.broadcastQueued = false
-      void this.broadcastSnapshot()
+      void this.broadcastSnapshot().catch((error) => {
+        // A transient project-list or watcher failure must not become an
+        // unhandled rejection in Electron's main process.
+        console.error('[mobile bridge] snapshot broadcast failed:', (error as Error).message)
+      })
     })
   }
 

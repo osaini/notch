@@ -1,7 +1,6 @@
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import type {
   AgentStatus,
@@ -13,13 +12,14 @@ import type {
   SessionsSnapshot,
   StructuredQuestion
 } from '@shared/types'
+import { AGENT_PATHS } from './agentPaths'
 import { ClaudeTitleReader } from './claudeTranscript'
 import { DesignWatcher, type DesignWindow } from './designWatcher'
 import { platform } from './platform'
 
-export const SESSIONS_DIR = path.join(os.homedir(), '.claude', 'sessions')
-export const CODEX_SESSIONS_DIR = path.join(os.homedir(), '.codex', 'sessions')
-export const CODEX_SESSION_INDEX = path.join(os.homedir(), '.codex', 'session_index.jsonl')
+export const SESSIONS_DIR = AGENT_PATHS.claudeSessions
+export const CODEX_SESSIONS_DIR = AGENT_PATHS.codexSessions
+export const CODEX_SESSION_INDEX = AGENT_PATHS.codexSessionIndex
 
 const POLL_MS = 2000
 const DEBOUNCE_MS = 120

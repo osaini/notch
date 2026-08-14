@@ -247,6 +247,7 @@ export class ManagedCodexService extends EventEmitter {
   stop(): void {
     this.stopping = true
     this.rejectRpc(new Error('Managed Codex stopped'))
+    this.models = null
     this.requests.clear()
     this.interactionByRequestId.clear()
     // Ownership is what suppresses the rollout fallback prompt. Once we can no
@@ -272,7 +273,7 @@ export class ManagedCodexService extends EventEmitter {
     }
 
     const [models, startedValue] = await Promise.all([
-      this.getModels(),
+      this.listModels(),
       this.request('thread/start', {
         cwd: request.cwd,
         approvalPolicy: approvalPolicy(request),
@@ -285,7 +286,11 @@ export class ManagedCodexService extends EventEmitter {
     if (!threadId) throw new Error('Codex did not return a thread ID')
     this.threads.set(threadId, { cwd: request.cwd, sessionId: threadId })
 
-    const model = compatibleModelOverride(string(started?.model), models)
+    // An explicit pick wins outright. The compatibility override only exists to
+    // rescue a thread that started on a model this server does not offer, which
+    // is not a question worth asking when the user named one.
+    const model =
+      request.codex?.model || compatibleModelOverride(string(started?.model), models)
     const codexArgs = managedCodexResumeArgs(this.state.endpoint!, threadId)
     // The plans are built up front because the error paths below report the
     // command that *would* have run, before any launch is attempted.
@@ -331,7 +336,13 @@ export class ManagedCodexService extends EventEmitter {
         await this.request('turn/start', {
           threadId,
           input: [{ type: 'text', text: prompt }],
-          ...(model ? { model } : {})
+          ...(model ? { model } : {}),
+          // `effort`, per `codex app-server generate-json-schema`
+          // (TurnStartParams). Not `reasoningEffort`, which is this value's
+          // name elsewhere in the protocol: the app server ignores unknown
+          // fields rather than rejecting them, so getting this wrong silently
+          // runs the turn at whatever config.toml says.
+          ...(request.codex?.effort ? { effort: request.codex.effort } : {})
         })
       )
       turnId = string(object(startedTurn?.turn)?.id)
@@ -457,9 +468,17 @@ export class ManagedCodexService extends EventEmitter {
 
     try {
       const socket = await this.connect(endpoint)
+      // Model availability belongs to one app-server connection. A restarted
+      // server can expose a different account or model catalog.
+      this.models = null
       this.socket = socket
       socket.on('message', (data) => this.onMessage(data.toString()))
-      socket.on('close', () => this.disconnect('Managed Codex connection closed'))
+      socket.on('close', () => {
+        // close() is asynchronous. If stop() followed immediately by start(),
+        // the old socket can close after the new one is already live; that
+        // stale callback must not tear down the replacement connection.
+        if (this.socket === socket) this.disconnect('Managed Codex connection closed')
+      })
       socket.on('error', (error) => this.emit('server-error', error))
       await this.request('initialize', {
         clientInfo: {
@@ -534,8 +553,19 @@ export class ManagedCodexService extends EventEmitter {
     })
   }
 
-  private async getModels(): Promise<CodexModel[]> {
+  /**
+   * Model ids this server offers, cached for the connection's lifetime.
+   *
+   * Public because the Dispatch picker asks for it directly. It never starts
+   * the server: an unopened socket returns an uncached empty list and lets the
+   * renderer fall back to its static ids.
+   */
+  async listModels(): Promise<CodexModel[]> {
     if (this.models) return this.models
+    // The Dispatch tab asks before the service normally starts. Returning the
+    // static-fallback signal must not cache it: dispatch() starts the server
+    // later and needs a real model/list request at that point.
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return []
     try {
       const response = object(await this.request('model/list', {}))
       this.models = Array.isArray(response?.data)
@@ -545,10 +575,12 @@ export class ManagedCodexService extends EventEmitter {
             return id ? [{ id, isDefault: model?.isDefault === true }] : []
           })
         : []
+      return this.models
     } catch {
-      this.models = []
+      // A transient RPC failure is not a model catalog. Leave the cache empty
+      // so a later request on this connection can recover.
+      return []
     }
-    return this.models
   }
 
   private send(message: RpcMessage): void {
@@ -629,6 +661,7 @@ export class ManagedCodexService extends EventEmitter {
   private disconnect(reason: string): void {
     if (this.stopping) return
     this.rejectRpc(new Error(reason))
+    this.models = null
     this.socket = null
     const child = this.child
     this.child = null

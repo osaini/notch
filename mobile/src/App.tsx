@@ -391,6 +391,22 @@ function NewTaskSheet({
   )
 }
 
+/**
+ * Reads the pairing code out of the fragment the desktop QR code encodes, then
+ * strips it from the URL.
+ *
+ * Consuming it is the point. A fragment survives reload, back navigation and
+ * being restored as a home-screen shortcut, so leaving it in place would keep
+ * re-filling a code that the desktop replaced the moment this phone used it —
+ * which looks exactly like the app ignoring what you typed.
+ */
+function consumePairingCodeFromUrl(): string {
+  const match = /(?:^|[#&])pair=(\d{6})(?:&|$)/.exec(window.location.hash)
+  if (!match) return ''
+  window.history.replaceState(null, '', window.location.pathname + window.location.search)
+  return match[1]
+}
+
 function PairingScreen({
   bridge,
   status,
@@ -400,7 +416,7 @@ function PairingScreen({
   status: BridgeStatus
   onPaired: () => void
 }): React.JSX.Element {
-  const [code, setCode] = useState('')
+  const [code, setCode] = useState(consumePairingCodeFromUrl)
   const [deviceName, setDeviceName] = useState('My phone')
   const [pairing, setPairing] = useState(false)
   const [error, setError] = useState('')
@@ -426,7 +442,9 @@ function PairingScreen({
         <span className="eyebrow">Secure connection</span>
         <h1>Pair with {status.computerName}</h1>
         <p>
-          Open Settings in Notch and enter the six-digit phone companion code.
+          {code
+            ? 'Code filled in from the QR code. Name this phone, then pair.'
+            : 'Open Settings in Notch and enter the six-digit phone companion code.'}
         </p>
         <label className="field">
           <span>Pairing code</span>

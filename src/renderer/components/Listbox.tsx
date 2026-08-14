@@ -5,7 +5,8 @@ export interface ListboxOption {
   title: string
   meta?: string
   aside?: string
-  kind?: 'project' | 'display'
+  /** `plain` drops the leading marker, for lists where a dot means nothing. */
+  kind?: 'project' | 'display' | 'plain'
 }
 
 interface Props {
@@ -154,8 +155,12 @@ function OptionContent({
   placeholder: string
 }): React.JSX.Element {
   return (
-    <span className="listbox-content">
-      <i className={option?.kind === 'display' ? 'display-mark' : 'project-dot'} aria-hidden="true" />
+    // `plain` drops the marker *and* its grid column; without the class the
+    // copy would slide left into the 8px track and clip to one character.
+    <span className={option?.kind === 'plain' ? 'listbox-content plain' : 'listbox-content'}>
+      {option?.kind !== 'plain' && (
+        <i className={option?.kind === 'display' ? 'display-mark' : 'project-dot'} aria-hidden="true" />
+      )}
       <span className="listbox-copy">
         <strong>{option?.title ?? placeholder}</strong>
         {option?.meta && <small>{option.meta}</small>}

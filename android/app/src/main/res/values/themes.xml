@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- Parented on the framework theme rather than a Material Components one so
+       the app needs no com.google.android.material dependency; Compose draws
+       everything above this anyway. -->
+  <style name="Theme.NotchCompanion" parent="@android:style/Theme.Material.NoActionBar">
+    <item name="android:statusBarColor">#171513</item>
+    <item name="android:navigationBarColor">#171513</item>
+    <item name="android:windowBackground">#171513</item>
+  </style>
+</resources>

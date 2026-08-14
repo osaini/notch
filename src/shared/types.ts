@@ -228,15 +228,76 @@ export interface PlanUsage {
   periods: PlanUsagePeriod[]
 }
 
+/**
+ * The Claude members are the CLI's own `--permission-mode` choices, verbatim.
+ *
+ * `manual` is what Claude Code used to call `default`; it is spelled the CLI's
+ * way here so nothing can forward a name the binary no longer recognises.
+ * `auto` approves tool calls behind a background safety classifier and is only
+ * available when no settings file sets `permissions.disableAutoMode`.
+ */
 export type PermissionMode =
-  | 'default'
+  | 'manual'
+  | 'auto'
   | 'acceptEdits'
   | 'plan'
   | 'bypassPermissions'
+  | 'dontAsk'
   | 'codex-untrusted'
   | 'codex-on-request'
   | 'codex-never'
   | 'codex-bypass'
+
+/**
+ * Effort levels each CLI accepts, as declared by the installed binaries.
+ *
+ * `undefined` is a meaningful third state everywhere these appear: it means
+ * "send no flag at all", so the agent keeps whatever its own config says.
+ */
+export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+/**
+ * The set the Codex *API* accepts, which is narrower than the set the CLI will
+ * parse. `minimal` and `ultra` deserialize happily and are even written to the
+ * rollout, then the turn dies with a 400 naming these six as the supported
+ * values — so offering them would mean offering a choice that cannot run.
+ */
+export type CodexEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** A per-agent model/effort override. Empty fields mean the agent's own default. */
+export interface AgentTuning<E extends string> {
+  /** Model id or alias, exactly as the CLI's `--model` expects it. */
+  model?: string
+  effort?: E
+}
+
+/** Claude model aliases offered in the picker. A full id can also be sent. */
+export const CLAUDE_MODEL_ALIASES: readonly string[] = ['fable', 'opus', 'sonnet', 'haiku']
+
+/**
+ * Codex model ids offered when the app server is not running and `model/list`
+ * cannot be reached.
+ *
+ * A fallback, never the source of truth. `model/list` is account-aware and this
+ * list cannot be: a model can exist in the binary and still be refused with
+ * "not supported when using Codex with a ChatGPT account". These are a snapshot
+ * of a real `model/list` response, so they are at least ids a plan actually
+ * served, rather than every name the CLI knows.
+ */
+export const CODEX_MODEL_FALLBACK: readonly string[] = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini'
+]
+
+/** Maximum clipboard bitmap accepted by either side of the IPC boundary. */
+export const MAX_PASTED_IMAGE_BYTES = 32 * 1024 * 1024
+
+export function isReadablePastedImagePayload(type: string, size: number): boolean {
+  return type.startsWith('image/') && size > 0 && size <= MAX_PASTED_IMAGE_BYTES
+}
 
 /**
  * What the Dispatch tab can launch. Wider than `AgentKind`, which describes a
@@ -257,6 +318,13 @@ export interface DispatchRequest {
   comboWorkflow?: ComboWorkflow
   /** Absolute paths from the Tray, appended to the prompt as @-references. */
   attachments?: string[]
+  /**
+   * Model/effort overrides, keyed by the agent they configure rather than by
+   * the role it plays. That is what lets the `claude-codex` pair carry a
+   * separate choice for each half in a single request.
+   */
+  claude?: AgentTuning<ClaudeEffort>
+  codex?: AgentTuning<CodexEffort>
 }
 
 /** Versions of the installed agent CLIs, probed once at startup. */
@@ -418,10 +486,37 @@ export interface AppSettings {
   mobileBridge: boolean
 }
 
+/**
+ * Why an address is or is not worth typing into a phone.
+ *
+ * `lan` is the only kind that routes from a phone on the same Wi-Fi. `vpn`
+ * works, but only while the phone is on the same overlay network. `loopback`
+ * never works from another device and is offered purely for testing in a
+ * browser on this computer.
+ */
+export type MobileEndpointKind = 'lan' | 'vpn' | 'loopback' | 'other'
+
+export interface MobileEndpoint {
+  url: string
+  /** The OS interface name, e.g. "Wi-Fi" — how the user recognises which is which. */
+  label: string
+  kind: MobileEndpointKind
+  /**
+   * The address the routing table would actually use to leave this machine.
+   * Exactly one endpoint carries this, and it is the one the QR code encodes.
+   */
+  recommended: boolean
+}
+
 export interface MobileBridgeStatus {
   running: boolean
   port: number | null
-  urls: string[]
+  /**
+   * Ordered best-first. A machine with a VPN, a docking station and a Bluetooth
+   * adapter has a dozen IPv4 addresses and only one of them reaches a phone, so
+   * this is filtered and ranked rather than a raw interface dump.
+   */
+  endpoints: MobileEndpoint[]
   pairingCode: string
   pairingExpiresAt: number
   pairedDevices: number
@@ -443,6 +538,12 @@ export interface NotchApi {
   onManagedCodexState(cb: (state: ManagedCodexState) => void): () => void
   onSettings(cb: (settings: AppSettings) => void): () => void
   onDragState(cb: (state: NotchDragState) => void): () => void
+  /**
+   * Pushed whenever the bridge starts, stops, re-issues a pairing code or drops
+   * an expired device. Without it the Settings tab shows a code that silently
+   * stopped working the moment a phone consumed it.
+   */
+  onMobileStatus(cb: (status: MobileBridgeStatus) => void): () => void
   /**
    * The drag state as it stands right now. The resting state carries the offset
    * that places the pill, so a renderer that subscribed after the last message
@@ -467,8 +568,20 @@ export interface NotchApi {
   getRecentProjects(): Promise<string[]>
   /** Installed agent CLI versions, for the Dispatch cards. */
   getAgentVersions(): Promise<AgentVersions>
+  /**
+   * Model ids the managed Codex app server reports. Empty when it is not
+   * running — the picker falls back to `CODEX_MODEL_FALLBACK` rather than
+   * starting a server just to fill a dropdown.
+   */
+  getCodexModels(): Promise<string[]>
   browseFiles(): Promise<string[]>
   browseDirectory(initialPath?: string): Promise<string | null>
+  /**
+   * Writes a pasted image to disk and returns its path, or null if the bytes
+   * are not an image the app can name. Only for clipboard payloads: a file that
+   * already has a path is referenced where it lies.
+   */
+  savePastedImage(bytes: Uint8Array): Promise<string | null>
   dispatch(req: DispatchRequest): Promise<DispatchResult>
   terminateSession(key: string): Promise<SessionActionResult>
   focusSession(key: string): Promise<SessionActionResult>

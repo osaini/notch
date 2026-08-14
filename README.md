@@ -298,8 +298,13 @@ The scanner incrementally reads:
 
 ```text
 ~/.claude/projects/**/*.jsonl
+~/.claude/transcripts/**/*.jsonl
 ~/.codex/sessions/**/*.jsonl
+~/.codex/archived_sessions/**/*.jsonl
 ```
+
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` override their respective roots. Equivalent transcript
+copies are de-duplicated by session file name, with the active copy preferred over an archive.
 
 Per-file offsets and aggregates are cached in `app.getPath('userData')/usage-cache.json`. Reads use
 4 MB byte slices, keep incomplete trailing lines for the next pass, and do not split UTF-8
@@ -338,8 +343,16 @@ interpolated into shell syntax. **That last property is a project invariant, not
 detail** — see [SECURITY.md](SECURITY.md). Terminal launching on macOS is not implemented yet, and
 the Dispatch tab says so.
 
-The Tray holds dropped file paths and appends them to the next dispatch as references. Files are not
-copied or uploaded.
+The Tray holds file paths and appends them to the next dispatch as references. Nothing is uploaded,
+and a file that already exists on disk — dropped, or chosen from the picker — is referenced where it
+lies rather than copied.
+
+A clipboard image has no path to reference, so `Ctrl+V` (`⌘V` on macOS) anywhere in the panel writes
+it into `pasted-images/` under the app's user data directory and puts that path in the Tray. Pastes
+carrying no image are left alone, so text still pastes into the prompt. The extension comes from
+sniffing the bytes rather than from the type the clipboard claims — that extension is the only hint
+the agent gets about what it is opening — and bytes matching no known image format are refused
+rather than saved under a guess. Pasted images older than a week are swept on the next paste.
 
 ## Session actions
 
@@ -394,10 +407,19 @@ Exclusive-fullscreen apps may cover the overlay.
 device grants it unattended code execution in your projects.
 
 Once enabled, Notch hosts a mobile web app and authenticated API on port `47822`, bound to
-every network interface. Copy one of the phone companion URLs to a phone on the same private
-network and enter the displayed six-digit pairing code. Windows Firewall may ask you to allow the
-app on private networks. Turning the setting back off closes the port immediately, without a
-restart.
+every network interface. Scan the QR code in Settings with your phone's camera: it opens the
+companion and fills in the six-digit pairing code, so all you do on the phone is name the device
+and tap **Pair phone**. Windows Firewall may ask you to allow the app on private networks.
+Turning the setting back off closes the port immediately, without a restart.
+
+If you would rather type the address, Settings lists the reachable ones underneath, best first.
+A machine typically has several IPv4 addresses and only one of them reaches a phone, so the list
+is filtered and labelled rather than dumped: addresses that can never work (`169.254.*`, handed
+out when an adapter fails DHCP) and public addresses that are unsafe for plain HTTP are hidden,
+VPN addresses are marked **Over VPN**, and the one matching this computer's default route is
+marked **Recommended** and is what the QR code encodes.
+`localhost` is listed last and greyed out — it resolves to the *phone*, so it is only useful for
+trying the companion in a browser on this computer.
 
 The phone receives live session snapshots over server-sent events, reads normalized recent
 transcript messages, launches Claude or Codex in a project the *computer* already knows about
@@ -418,6 +440,17 @@ request. Use it only on a trusted private LAN or private overlay network — nev
 port to the public internet. The included PWA manifest is ready, but service-worker installation
 and offline caching on a phone require HTTPS.
 
+### Android app
+
+There is also a native Android client in [`android/`](android/), talking to the same API. Its one
+real advantage over the web app is **notifications when an agent needs input**: that needs a
+background connection, which a PWA cannot hold here — Web Push has no cloud service to deliver
+through on a LAN-only server, and service workers do not install over plain HTTP at all.
+
+It is a standalone Gradle build, is not part of CI, and produces a sideloadable debug APK. See
+[`android/README.md`](android/README.md) to build and install it. The web companion remains fully
+supported; if you do not want background alerts you do not need this.
+
 ## Layout
 
 ```text
@@ -437,6 +470,7 @@ src/
     mobileBridge.ts     paired phone API, SSE, transcripts and static PWA host
     transcriptTail.ts   extracts a turn's closing question from a transcript
     agentVersions.ts    probes the installed agent CLI versions
+    pastedImages.ts     names clipboard bytes by sniffing them, then writes them
     focus.ts            best-effort host-window focus
     tray.ts             status tray icon and menu
     trayRender.ts       the tray mark as pure pixels, shared by both platforms
@@ -452,6 +486,7 @@ src/
     App.tsx             shell, tab router and expand logic
     platform.tsx        host OS copy and feature flags, fetched once
     statusFlash.ts      status-change flash priority state machine
+    pasteImages.ts      resolves pasted/dropped payloads to tray paths
     format.ts           duration and path formatting
     emptyUsage.ts       empty-state usage snapshot
     components/Listbox.tsx
@@ -459,12 +494,13 @@ src/
       Sessions.tsx      session rows and the interaction takeover
       Usage.tsx
       Dispatch.tsx
-      Tray.tsx          file tray and drop target
+      Tray.tsx          file tray, drop target and paste hint
       Settings.tsx
   shared/types.ts       every cross-boundary type
 scripts/                verify, hook/launcher install, tests, icon generation
 electron-builder.yml    packaging config, in YAML so it can explain itself
 mobile/                 installable React phone companion (separate package)
+android/                native Kotlin phone companion (separate Gradle build, not in CI)
 debug-orchestrator/     adversarial Claude+Codex bug-discovery pipeline
 docs/                   design notes
 ```

@@ -20,6 +20,7 @@ import {
   type FlashColor
 } from './statusFlash'
 import { priorityPillLabel } from './pillStatus'
+import { usePasteImages } from './pasteImages'
 
 type TabId = 'sessions' | 'usage' | 'dispatch' | 'tray' | 'settings'
 
@@ -308,6 +309,10 @@ export function App(): React.JSX.Element {
   const addAttachments = useCallback((paths: string[]) => {
     setAttachments((previous) => [...new Set([...previous, ...paths])])
   }, [])
+
+  // Panel-wide, not Tray-pane-only: a screenshot is usually pasted mid-sentence
+  // while writing the prompt it belongs to. The Tray tab's badge is the receipt.
+  usePasteImages(addAttachments)
 
   const onNotchMouseEnter = useCallback((): void => {
     if (hoverLeaveTimerRef.current !== null) {

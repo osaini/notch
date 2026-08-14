@@ -34,6 +34,7 @@ const api: NotchApi = {
     subscribe<ManagedCodexState>('notch:managedCodexState', cb),
   onSettings: (cb) => subscribe<AppSettings>('notch:settings', cb),
   onDragState: (cb) => subscribe<NotchDragState>('notch:dragState', cb),
+  onMobileStatus: (cb) => subscribe<MobileBridgeStatus>('notch:mobileStatus', cb),
   getDragState: () => ipcRenderer.invoke('notch:getDragState') as Promise<NotchDragState>,
   onForceExpand: (cb) => {
     const listener = (): void => cb()
@@ -68,9 +69,12 @@ const api: NotchApi = {
 
   getRecentProjects: () => ipcRenderer.invoke('notch:getRecentProjects') as Promise<string[]>,
   getAgentVersions: () => ipcRenderer.invoke('notch:getAgentVersions') as Promise<AgentVersions>,
+  getCodexModels: () => ipcRenderer.invoke('notch:getCodexModels') as Promise<string[]>,
   browseFiles: () => ipcRenderer.invoke('notch:browseFiles') as Promise<string[]>,
   browseDirectory: (initialPath?: string) =>
     ipcRenderer.invoke('notch:browseDirectory', initialPath) as Promise<string | null>,
+  savePastedImage: (bytes: Uint8Array) =>
+    ipcRenderer.invoke('notch:savePastedImage', bytes) as Promise<string | null>,
   dispatch: (req: DispatchRequest) =>
     ipcRenderer.invoke('notch:dispatch', req) as Promise<DispatchResult>,
   terminateSession: (key) =>

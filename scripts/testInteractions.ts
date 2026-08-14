@@ -783,7 +783,16 @@ async function testManagedCodexDispatchLaunch(): Promise<void> {
   })
 
   try {
+    assert.deepEqual(await service.listModels(), [])
     await service.start()
+    assert.deepEqual(await service.listModels(), [{ id: 'gpt-compatible', isDefault: true }])
+    assert.equal(methods.filter((method) => method === 'model/list').length, 1)
+    service.stop()
+    await service.start()
+    await new Promise<void>((resolve) => setTimeout(resolve, 25))
+    assert.equal(service.getState().status, 'ready')
+    assert.deepEqual(await service.listModels(), [{ id: 'gpt-compatible', isDefault: true }])
+    assert.equal(methods.filter((method) => method === 'model/list').length, 2)
     const prompt = 'prompt with spaces\nand "quotes"'
     const result = await service.dispatch({
       agent: 'codex',
@@ -1149,6 +1158,22 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
     await dispatchFromPhone('codex')
     assert.equal(dispatched[0].permissionMode, 'bypassPermissions')
     assert.equal(dispatched[1].permissionMode, 'codex-bypass')
+
+    const invalidAgent = await fetch(`${origin}/api/v1/dispatch`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie: `notch_device=${freshToken}`
+      },
+      body: JSON.stringify({ agent: 'claud', cwd: dir, prompt: 'Must not run' })
+    })
+    assert.equal(invalidAgent.status, 400)
+    assert.equal(dispatched.length, 2)
+
+    const malformedCookie = await fetch(`${origin}/api/v1/snapshot`, {
+      headers: { cookie: 'notch_device=%E0%A4%A' }
+    })
+    assert.equal(malformedCookie.status, 401)
 
     // Expiry is enforced by each authorization check, not only when the bridge
     // happens to restart and reload its device file.

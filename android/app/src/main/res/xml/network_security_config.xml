@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The bridge speaks plain HTTP by design (see SECURITY.md), and Android has
+  blocked cleartext by default since API 28, so without this the app cannot
+  reach Notch at all.
+
+  Cleartext is allowed only for private address space — RFC1918, RFC6598 CGNAT
+  for Tailscale-style overlays, and loopback. A public host still requires TLS,
+  which keeps the "never port-forward this service" rule enforceable on the
+  client too rather than trusting the user to only type private addresses.
+-->
+<network-security-config>
+  <!-- Android domain rules cannot express CIDR ranges. NotchClient performs
+       the private-address check before opening any plain-HTTP connection. -->
+  <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

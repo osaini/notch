@@ -828,6 +828,24 @@ button.session-cwd:hover { color: var(--clay-bright); }
 .usage-stats { display: grid; align-content: center; gap: 5px; }
 .usage-stats span { display: grid; grid-template-columns: 1fr auto; gap: 8px; color: var(--text-4); font-size: 10.5px; }
 .usage-stats b { color: var(--ink); font: 500 11px/1.4 'JetBrains Mono', monospace; }
+.usage-insights { display: grid; padding: 0 14px; grid-template-columns: 1.2fr .8fr; gap: 12px; }
+.activity-card, .model-card { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.usage-heatmap { display: grid; height: 54px; grid-auto-flow: column; grid-auto-columns: minmax(3px,1fr); grid-template-rows: repeat(7, 6px); gap: 2px; }
+.usage-heatmap span { min-width: 0; border-radius: 1px; background: var(--line); }
+.usage-heatmap .heat-1 { background: color-mix(in srgb, var(--clay-bright) 28%, var(--line)); }
+.usage-heatmap .heat-2 { background: color-mix(in srgb, var(--clay-bright) 48%, var(--line)); }
+.usage-heatmap .heat-3 { background: color-mix(in srgb, var(--clay-bright) 72%, var(--line)); }
+.usage-heatmap .heat-4 { background: var(--clay-bright); }
+.activity-stats { display: flex; margin-top: 8px; justify-content: space-between; gap: 8px; color: var(--text-5); font-size: 9.5px; }
+.activity-stats span { display: flex; flex-direction: column; gap: 3px; }
+.activity-stats b { color: var(--ink); font: 500 10px/1 'JetBrains Mono', monospace; }
+.model-card { display: flex; flex-direction: column; gap: 7px; }
+.model-card > small { color: var(--text-6); font-size: 10px; }
+.model-row { display: grid; min-width: 0; grid-template-columns: minmax(0,1fr) 34px auto; align-items: center; gap: 6px; }
+.model-row > span { overflow: hidden; color: var(--text-4); font: 400 9.5px/1 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.model-row > i { height: 3px; overflow: hidden; border-radius: 2px; background: var(--line); }
+.model-row > i > em { display: block; height: 100%; background: var(--steel); }
+.model-row > b { color: var(--ink); font: 500 9.5px/1 'JetBrains Mono', monospace; }
 .plan-bars { padding: 0 14px; }
 .plan-row { display: grid; grid-template-columns: 54px minmax(0,1fr) 44px; align-items: center; gap: 8px; margin-bottom: 7px; }
 .plan-row > b { color: var(--clay-bright); font: 700 9.5px/1 'JetBrains Mono', monospace; letter-spacing: .06em; text-transform: uppercase; }
@@ -893,10 +911,24 @@ input[type='range']::-webkit-slider-thumb { width: 13px; height: 13px; margin-to
 .mobile-bridge-card { display: flex; padding: 11px; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .mobile-bridge-card .section-rule { padding: 0; }
 .online-label::before { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; content: ''; background: currentColor; }
-.mobile-url { display: flex; padding: 7px 8px; align-items: center; gap: 8px; border-radius: 6px; color: var(--text-5); background: var(--bg); font: 400 10px/1 'JetBrains Mono', monospace; }
-.mobile-url span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.mobile-url { display: flex; padding: 7px 8px; align-items: center; gap: 8px; border: 1px solid transparent; border-radius: 6px; color: var(--text-5); background: var(--bg); font: 400 10px/1 'JetBrains Mono', monospace; }
+.mobile-url.selected { border-color: var(--clay-bright); }
+/* Loopback is listed only so it can be tried in a browser on this computer. It
+   is dimmed because reaching for it from a phone is the mistake this list exists
+   to stop. */
+.mobile-url.kind-loopback { opacity: 0.55; }
+.mobile-url-pick { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.mobile-url-address { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.mobile-url-hint { flex: none; color: var(--text-4); font: 500 9px/1 'Instrument Sans', sans-serif; }
+.mobile-url.selected .mobile-url-hint { color: var(--clay-bright); }
 .mobile-url button { padding: 0; border: 0; color: var(--clay-bright); background: transparent; font: 500 10px/1 'Instrument Sans', sans-serif; cursor: pointer; }
-.pairing-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
+.pairing-scan { display: flex; align-items: flex-start; gap: 12px; }
+.pairing-scan-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: flex-start; gap: 6px; }
+.pairing-scan-copy .btn { margin-top: 2px; }
+/* Deliberately not themed. Plenty of scanners cope with a light-on-dark code,
+   but not all of them, and a code that fails to scan on someone's phone is the
+   exact failure this whole affordance exists to remove. */
+.qr-code { flex: none; padding: 6px; border-radius: 6px; color: #171513; background: #fff; }
 .pairing-code { display: flex; margin-top: 5px; gap: 4px; }
 .pairing-code span { display: grid; width: 26px; height: 32px; place-items: center; border-radius: 5px; color: var(--ink); background: var(--bg); font: 500 16px/1 'JetBrains Mono', monospace; user-select: text; }
 .danger-link { align-self: flex-start; color: var(--red); }
@@ -941,3 +973,10 @@ input[type='range']::-webkit-slider-thumb { width: 13px; height: 13px; margin-to
   .session-shimmer { display: none; }
   .ring-progress { transition: none; }
 }
+
+/* Model + effort pickers: two listboxes sharing a row inside a .mode-field. */
+.tuning-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+/* No marker means no marker column, or the copy inherits the 8px dot track. */
+.listbox-content.plain { grid-template-columns: minmax(0,1fr) auto; }
+/* Half-width triggers put the copy under the absolutely positioned chevron. */
+.tuning-row .listbox-trigger { padding-right: 30px; }

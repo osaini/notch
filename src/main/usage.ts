@@ -9,12 +9,15 @@ import type {
   UsageDayCount,
   UsageSnapshot
 } from '@shared/types'
+import { AGENT_PATHS } from './agentPaths'
 
-const CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR
-  ? path.resolve(process.env.CLAUDE_CONFIG_DIR)
-  : path.join(os.homedir(), '.claude')
-export const PROJECTS_DIR = path.join(CLAUDE_CONFIG_DIR, 'projects')
-export const CODEX_PROJECTS_DIR = path.join(os.homedir(), '.codex', 'sessions')
+const CLAUDE_CONFIG_DIR = AGENT_PATHS.claudeRoot
+export const PROJECTS_DIR = AGENT_PATHS.claudeProjects
+export const CLAUDE_TRANSCRIPTS_DIR = AGENT_PATHS.claudeTranscripts
+export const CLAUDE_USAGE_DIRS = [PROJECTS_DIR, CLAUDE_TRANSCRIPTS_DIR] as const
+export const CODEX_PROJECTS_DIR = AGENT_PATHS.codexSessions
+export const CODEX_ARCHIVED_PROJECTS_DIR = AGENT_PATHS.codexArchivedSessions
+export const CODEX_USAGE_DIRS = [CODEX_PROJECTS_DIR, CODEX_ARCHIVED_PROJECTS_DIR] as const
 const CLAUDE_CONFIG_PATH = process.env.CLAUDE_CONFIG_DIR
   ? path.join(CLAUDE_CONFIG_DIR, '.claude.json')
   : path.join(os.homedir(), '.claude.json')
@@ -149,6 +152,24 @@ async function listTranscripts(dir: string): Promise<string[]> {
     else if (entry.isFile() && entry.name.endsWith('.jsonl')) output.push(full)
   }
   return output
+}
+
+/**
+ * Finds transcripts across equivalent active/archive roots without counting a
+ * session twice while it is being moved or mirrored. Session file basenames
+ * contain globally unique IDs for both Claude and Codex; earlier roots win, so
+ * the live copy is preferred over an archived or compatibility copy.
+ */
+export async function listUniqueTranscripts(roots: readonly string[]): Promise<string[]> {
+  const groups = await Promise.all(roots.map(listTranscripts))
+  const unique = new Map<string, string>()
+  for (const files of groups) {
+    for (const file of files) {
+      const identity = path.basename(file).toLowerCase()
+      if (!unique.has(identity)) unique.set(identity, file)
+    }
+  }
+  return [...unique.values()]
 }
 
 function addUsage(
@@ -834,8 +855,8 @@ export class UsageScanner extends EventEmitter {
     this.lastPassBytes = 0
     try {
       const [claudeFiles, codexFiles, claudeCached] = await Promise.all([
-        listTranscripts(PROJECTS_DIR),
-        listTranscripts(CODEX_PROJECTS_DIR),
+        listUniqueTranscripts(CLAUDE_USAGE_DIRS),
+        listUniqueTranscripts(CODEX_USAGE_DIRS),
         readClaudeCachedPlanUsage()
       ])
       const sources = new Map<string, AgentKind>()

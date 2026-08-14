@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  CLAUDE_MODEL_ALIASES,
+  CODEX_MODEL_FALLBACK,
   LAUNCHER_LABELS,
+  type AgentTuning,
   type AgentVersions,
+  type ClaudeEffort,
+  type CodexEffort,
   type ComboWorkflow,
   type DispatchResult,
   type DispatchTarget,
   type PermissionMode,
   type UsageSnapshot
 } from '@shared/types'
-import { Listbox } from '../components/Listbox'
+import { Listbox, type ListboxOption } from '../components/Listbox'
 import { durationUntil } from '../format'
 import { usePlatform } from '../platform'
 
@@ -18,8 +23,15 @@ interface Props {
   onClearAttachments: () => void
 }
 
+/**
+ * Labelled the way the CLI labels them. `dontAsk` is a valid mode the picker
+ * deliberately leaves out: it skips prompting without the safety classifier
+ * that makes `auto` reasonable, and `bypassPermissions` already covers that
+ * ground with an honest name.
+ */
 const CLAUDE_MODES: { id: PermissionMode; label: string; severity: string }[] = [
-  { id: 'default', label: 'Default', severity: 'safe' },
+  { id: 'manual', label: 'Manual', severity: 'safe' },
+  { id: 'auto', label: 'Auto', severity: 'caution' },
   { id: 'acceptEdits', label: 'Accept edits', severity: 'caution' },
   { id: 'plan', label: 'Plan', severity: 'info' },
   { id: 'bypassPermissions', label: 'Bypass permissions', severity: 'danger' }
@@ -53,14 +65,32 @@ const TARGETS: {
   { id: 'claude-codex', monogram: 'C+X', title: 'Claude + Codex', short: 'the pair' }
 ]
 
+const CLAUDE_EFFORTS: ClaudeEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+const CODEX_EFFORTS: CodexEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * Builds a picker list whose first entry sends nothing at all.
+ *
+ * The empty value is the point: it is what keeps "Default" from being a model
+ * name of its own, so an untouched dispatch produces exactly the argv it
+ * produced before these selectors existed.
+ */
+function tuningOptions(values: readonly string[], defaultMeta: string): ListboxOption[] {
+  return [
+    { value: '', title: 'Default', meta: defaultMeta, kind: 'plain' },
+    ...values.map((value) => ({ value, title: value, kind: 'plain' as const }))
+  ]
+}
+
 /**
  * The permission mode each target resets to when selected. The pair defaults to
- * `acceptEdits` so the radios match `buildAdversarialArgs`' own fallback.
+ * `auto` so the radios match `buildAdversarialArgs`' own fallback: an
+ * implementer working alongside a reviewer is meant to run unattended.
  */
 const DEFAULT_MODE: Record<string, PermissionMode> = {
-  claude: 'default',
+  claude: 'manual',
   codex: 'codex-on-request',
-  'claude-codex': 'acceptEdits'
+  'claude-codex': 'auto'
 }
 
 function versionLabel(target: DispatchTarget, versions: AgentVersions | null): string {
@@ -77,9 +107,13 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
   const [agent, setAgent] = useState<DispatchTarget>('claude')
   const [cwd, setCwd] = useState('')
   const [prompt, setPrompt] = useState('')
-  const [mode, setMode] = useState<PermissionMode>('default')
+  const [mode, setMode] = useState<PermissionMode>('manual')
   const [workflow, setWorkflow] = useState<ComboWorkflow>('bug-search')
   const [versions, setVersions] = useState<AgentVersions | null>(null)
+  // Empty objects mean "Default everywhere", which sends no flags at all.
+  const [claudeTuning, setClaudeTuning] = useState<AgentTuning<ClaudeEffort>>({})
+  const [codexTuning, setCodexTuning] = useState<AgentTuning<CodexEffort>>({})
+  const [codexModels, setCodexModels] = useState<readonly string[]>(CODEX_MODEL_FALLBACK)
   const [result, setResult] = useState<DispatchResult | null>(null)
   const [sending, setSending] = useState(false)
   const [browsing, setBrowsing] = useState(false)
@@ -90,6 +124,11 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
       setCwd((current) => current || directories[0] || '')
     })
     void window.notch.getAgentVersions().then(setVersions)
+    // Empty means the managed app server is not up to be asked, which is not an
+    // error — the static fallback already seeded the list.
+    void window.notch.getCodexModels().then((models) => {
+      if (models.length) setCodexModels(models)
+    })
   }, [])
 
   const projectOptions = useMemo(() => projects.map((directory, index) => ({
@@ -156,7 +195,11 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
         prompt,
         permissionMode: mode,
         comboWorkflow: combo ? workflow : undefined,
-        attachments
+        attachments,
+        // Sent for whichever agents this target actually runs. The pair sends
+        // both, and each half is routed to the agent its key names.
+        claude: agent === 'codex' ? undefined : claudeTuning,
+        codex: combo || agent === 'codex' ? codexTuning : undefined
       })
       setResult(response)
       if (response.ok) {
@@ -180,7 +223,7 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
             className={`agent-card ${candidate.id} ${agent === candidate.id ? 'active' : ''}`}
             onClick={() => {
               setAgent(candidate.id)
-              setMode(DEFAULT_MODE[candidate.id] ?? 'default')
+              setMode(DEFAULT_MODE[candidate.id] ?? 'manual')
             }}
           >
             <span className="agent-monogram">{candidate.monogram}</span>
@@ -300,6 +343,37 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
         </fieldset>
       )}
 
+      {/* Bug-search is excluded for the same reason the implementer-permission
+          block is: it runs the orchestrator, which pins its own agent settings. */}
+      {(!combo || workflow === 'adversarial') && (
+        <>
+          {agent !== 'codex' && (
+            <TuningRow
+              legend={combo ? 'Implementer model & effort (Claude)' : 'Model & effort'}
+              models={CLAUDE_MODEL_ALIASES}
+              efforts={CLAUDE_EFFORTS}
+              defaultMeta="Your Claude account default"
+              value={claudeTuning}
+              onChange={setClaudeTuning}
+            />
+          )}
+          {(combo || agent === 'codex') && (
+            <TuningRow
+              legend={combo ? 'Reviewer model & effort (Codex)' : 'Model & effort'}
+              models={codexModels}
+              efforts={CODEX_EFFORTS}
+              defaultMeta="From ~/.codex/config.toml"
+              value={codexTuning}
+              onChange={setCodexTuning}
+            />
+          )}
+          <p className="footnote">
+            Default sends no flag, so the agent keeps whatever model and effort its own config
+            already selects.
+          </p>
+        </>
+      )}
+
       {attachments.length > 0 && (
         <div className="attach-note">
           <b>Tray {attachments.length}</b>
@@ -338,6 +412,50 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
           : ''}
       </p>
     </div>
+  )
+}
+
+/**
+ * One agent's model + effort pair.
+ *
+ * Two `Listbox`es rather than another `.mode-grid` of radios: the pair target
+ * shows two of these at once, and four radio grids do not fit the overlay.
+ */
+function TuningRow<E extends string>({
+  legend,
+  models,
+  efforts,
+  defaultMeta,
+  value,
+  onChange
+}: {
+  legend: string
+  models: readonly string[]
+  efforts: readonly E[]
+  defaultMeta: string
+  value: AgentTuning<E>
+  onChange: (next: AgentTuning<E>) => void
+}): React.JSX.Element {
+  return (
+    <fieldset className="mode-field">
+      <legend>{legend}</legend>
+      <div className="tuning-row">
+        <Listbox
+          label={`${legend} — model`}
+          value={value.model ?? ''}
+          options={tuningOptions(models, defaultMeta)}
+          placeholder="Default"
+          onChange={(next) => onChange({ ...value, model: next || undefined })}
+        />
+        <Listbox
+          label={`${legend} — effort`}
+          value={value.effort ?? ''}
+          options={tuningOptions(efforts, defaultMeta)}
+          placeholder="Default"
+          onChange={(next) => onChange({ ...value, effort: (next as E) || undefined })}
+        />
+      </div>
+    </fieldset>
   )
 }
 

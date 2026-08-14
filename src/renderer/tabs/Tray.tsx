@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { filesFrom, trayPathsFor } from '../pasteImages'
+import { usePlatform } from '../platform'
 
 interface Props {
   attachments: string[]
@@ -10,16 +12,18 @@ interface Props {
 export function Tray({ attachments, onAdd, onRemove, onClear }: Props): React.JSX.Element {
   const [hovering, setHovering] = useState(false)
   const [selecting, setSelecting] = useState(false)
+  const platform = usePlatform()
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
     setHovering(false)
-    const paths: string[] = []
-    for (const file of Array.from(event.dataTransfer.files)) {
-      const path = window.notch.pathForFile(file)
-      if (path) paths.push(path)
-    }
-    if (paths.length) onAdd(paths)
+    // Same resolver as a paste, because a drag can carry either kind of payload:
+    // a file from the file manager has a path, an image dragged out of a browser
+    // is only bytes and has to be written down before the tray can hold it.
+    const files = filesFrom(event.dataTransfer)
+    void trayPathsFor(files).then((paths) => {
+      if (paths.length) onAdd(paths)
+    })
   }
 
   const chooseFiles = async (): Promise<void> => {
@@ -56,8 +60,15 @@ export function Tray({ attachments, onAdd, onRemove, onClear }: Props): React.JS
           {selecting ? 'Choosing files…' : 'Drop files here or click to choose'}
         </div>
         <div className="muted small">
-          They become @-references on your next dispatch. Nothing is copied or uploaded.
+          They become @-references on your next dispatch. Nothing is uploaded, and
+          dropped files stay where they are.
         </div>
+        {platform && (
+          <div className="muted small">
+            {platform.os === 'darwin' ? '⌘V' : 'Ctrl+V'} pastes a screenshot in from
+            anywhere in the panel.
+          </div>
+        )}
       </div>
 
       <div className="section-rule">

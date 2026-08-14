@@ -26,6 +26,7 @@ import { SETTINGS_PATH, getHookStatus, installHooks, uninstallHooks } from '../s
 import {
   UsageScanner,
   claudeCooldownMs,
+  listUniqueTranscripts,
   parseClaudePlanUsage,
   parseCodexPlanUsage,
   parseRetryAfterMs,
@@ -37,12 +38,19 @@ import {
   buildBugSearchRequest,
   buildClaudeArgs,
   buildCodexArgs,
+  autoModeDisabled,
   getRecentProjects,
-  hasOrchestrator
+  hasOrchestrator,
+  isAutoModeDisabled,
+  resolveClaudeMode
 } from '../src/main/dispatcher'
 // The Windows argv builders are imported from the win32 platform explicitly, not
 // through `platform`, so these assertions keep covering Windows on any host OS.
 import { buildPairWtArgs, buildWtArgs } from '../src/main/platform/win32/terminal'
+import { resolveAgentPaths } from '../src/main/agentPaths'
+import { savePastedImage, sniffImageExtension } from '../src/main/pastedImages'
+import { isSafeMobileEndpointAddress } from '../src/main/mobileBridge'
+import { isReadablePastedImagePayload } from '../src/shared/types'
 
 const pass = (msg: string): void => console.log(`  PASS  ${msg}`)
 const fail = (msg: string): void => {
@@ -338,6 +346,39 @@ async function checkDesign(): Promise<void> {
 
 async function checkUsage(): Promise<void> {
   section('usage (incremental scan)')
+  const customRoots = resolveAgentPaths(
+    { CLAUDE_CONFIG_DIR: './custom-claude', CODEX_HOME: './custom-codex' },
+    path.join('ignored', 'home')
+  )
+  if (
+    customRoots.claudeProjects === path.resolve('custom-claude', 'projects') &&
+    customRoots.claudeTranscripts === path.resolve('custom-claude', 'transcripts') &&
+    customRoots.codexSessions === path.resolve('custom-codex', 'sessions') &&
+    customRoots.codexArchivedSessions === path.resolve('custom-codex', 'archived_sessions')
+  ) {
+    pass('Claude and Codex data-root overrides cover every transcript location')
+  } else {
+    fail('agent data-root override resolution is inconsistent')
+  }
+  const rootsFixture = path.join(os.tmpdir(), `notch-usage-roots-${Date.now()}`)
+  const activeRoot = path.join(rootsFixture, 'sessions')
+  const archiveRoot = path.join(rootsFixture, 'archived_sessions')
+  fs.mkdirSync(activeRoot, { recursive: true })
+  fs.mkdirSync(archiveRoot, { recursive: true })
+  fs.writeFileSync(path.join(activeRoot, 'shared-session.jsonl'), '{"active":true}\n')
+  fs.writeFileSync(path.join(archiveRoot, 'shared-session.jsonl'), '{"archived":true}\n')
+  fs.writeFileSync(path.join(archiveRoot, 'archive-only.jsonl'), '{}\n')
+  const uniqueFiles = await listUniqueTranscripts([activeRoot, archiveRoot])
+  if (
+    uniqueFiles.length === 2 &&
+    uniqueFiles.includes(path.join(activeRoot, 'shared-session.jsonl')) &&
+    uniqueFiles.includes(path.join(archiveRoot, 'archive-only.jsonl'))
+  ) {
+    pass('active and archived transcript roots merge without double counting')
+  } else {
+    fail('equivalent transcript roots were not de-duplicated correctly')
+  }
+  fs.rmSync(rootsFixture, { recursive: true, force: true })
   const now = Date.now()
   const claudeFixture = parseClaudePlanUsage(
     {
@@ -655,7 +696,7 @@ async function checkDispatch(): Promise<void> {
     agent: 'claude-codex' as const,
     cwd: 'C:\\proj',
     prompt: 'harden the parser; add cases',
-    permissionMode: 'default' as const,
+    permissionMode: 'manual' as const,
     attachments: ['C:\\notes.md']
   }
   const { claudeArgs, codexArgs: reviewerArgs } = buildAdversarialArgs(comboReq)
@@ -680,12 +721,13 @@ async function checkDispatch(): Promise<void> {
   } else {
     fail(`implementer argv is malformed: ${JSON.stringify(accepted.claudeArgs)}`)
   }
-  // `default` is the CLI's own default, so buildClaudeArgs omits the flag —
-  // picking Default in the UI must not silently become acceptEdits.
-  if (!claudeArgs.includes('--permission-mode')) {
-    pass('a default implementer mode passes no --permission-mode flag')
+  // Manual is a real selection, not "inherit config". A user whose config
+  // defaults to auto/bypass still has to get the mode they clicked.
+  const manualAt = claudeArgs.indexOf('--permission-mode')
+  if (manualAt >= 0 && claudeArgs[manualAt + 1] === 'manual') {
+    pass('a manual implementer explicitly forces manual mode')
   } else {
-    fail(`default mode should not emit a flag: ${JSON.stringify(claudeArgs)}`)
+    fail(`manual mode was not forced: ${JSON.stringify(claudeArgs)}`)
   }
   // The chosen permission mode reaches the implementer; the reviewer's
   // read-only sandbox is pinned and must survive any choice.
@@ -702,10 +744,65 @@ async function checkDispatch(): Promise<void> {
     fail('implementer permission mode is not forwarded, or the reviewer sandbox moved')
   }
   const bogus = buildAdversarialArgs({ ...comboReq, permissionMode: 'codex-bypass' })
-  if (bogus.claudeArgs.includes('acceptEdits')) {
-    pass('a non-Claude mode falls back to acceptEdits for the implementer')
+  if (bogus.claudeArgs.includes('auto')) {
+    pass('a non-Claude mode falls back to auto for the implementer')
   } else {
     fail(`implementer fallback is wrong: ${JSON.stringify(bogus.claudeArgs)}`)
+  }
+  // Where the machine forbids `auto`, the implementer must still launch.
+  const degraded = buildAdversarialArgs(
+    { ...comboReq, permissionMode: 'codex-bypass' },
+    { autoDisabled: true }
+  )
+  if (
+    degraded.claudeArgs.includes('acceptEdits') &&
+    !degraded.claudeArgs.includes('auto')
+  ) {
+    pass('disableAutoMode degrades the implementer to acceptEdits rather than failing')
+  } else {
+    fail(`auto degrade is wrong: ${JSON.stringify(degraded.claudeArgs)}`)
+  }
+  // Only the settings file switches it off — an explicit pick is not a reason.
+  const settingsShapes: [unknown, boolean][] = [
+    [{ permissions: { disableAutoMode: 'disable' } }, true],
+    [{ permissions: { disableAutoMode: 'allow' } }, false],
+    [{ permissions: {} }, false],
+    [{}, false],
+    [null, false],
+    ['not an object', false]
+  ]
+  const wrongShapes = settingsShapes.filter(
+    ([settings, expected]) => isAutoModeDisabled(settings) !== expected
+  )
+  if (wrongShapes.length === 0) {
+    pass('disableAutoMode is read only from a real permissions object')
+  } else {
+    fail(`disableAutoMode parsing wrong for ${wrongShapes.length} shape(s)`)
+  }
+  const settingsFixture = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'notch-auto-mode-'))
+  const projectFixture = path.join(settingsFixture, 'project')
+  const rootFixture = path.join(settingsFixture, 'claude-home')
+  fs.mkdirSync(path.join(projectFixture, '.claude'), { recursive: true })
+  fs.mkdirSync(rootFixture, { recursive: true })
+  fs.writeFileSync(path.join(rootFixture, 'settings.json'), '{ malformed on purpose')
+  fs.writeFileSync(
+    path.join(projectFixture, '.claude', 'settings.local.json'),
+    JSON.stringify({ permissions: { disableAutoMode: 'disable' } })
+  )
+  if (await autoModeDisabled(projectFixture, rootFixture)) {
+    pass('project-local disableAutoMode survives a malformed user settings layer')
+  } else {
+    fail('project-local disableAutoMode was ignored')
+  }
+  await fs.promises.rm(settingsFixture, { recursive: true, force: true })
+  if (
+    resolveClaudeMode('auto', true) === 'acceptEdits' &&
+    resolveClaudeMode('auto', false) === 'auto' &&
+    resolveClaudeMode('plan', true) === 'plan'
+  ) {
+    pass('the auto downgrade touches auto only, and only when disabled')
+  } else {
+    fail('resolveClaudeMode downgraded the wrong mode')
   }
   const sandboxAt = reviewerArgs.indexOf('--sandbox')
   const approvalAt = reviewerArgs.indexOf('--ask-for-approval')
@@ -758,12 +855,191 @@ async function checkDispatch(): Promise<void> {
   else fail('no project candidates found')
 }
 
+/**
+ * A pasted image is named from its bytes, and that name is all the agent gets.
+ * A wrong extension is a file the agent cannot open, and an unrecognized blob
+ * saved anyway is a path in the prompt pointing at nothing useful.
+ */
+async function checkPastedImages(): Promise<void> {
+  section('pastedImages')
+
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13])
+  const samples: Array<[string, Uint8Array, string | null]> = [
+    ['a screenshot', PNG, 'png'],
+    ['a JPEG', new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]), 'jpg'],
+    ['a GIF', new Uint8Array(Buffer.from('GIF89a....')), 'gif'],
+    [
+      'a WebP',
+      new Uint8Array(Buffer.from('RIFF    WEBPVP8 ', 'binary')),
+      'webp'
+    ],
+    ['an SVG', new Uint8Array(Buffer.from('<?xml version="1.0"?><svg xmlns="x"/>')), 'svg'],
+    ['plain text', new Uint8Array(Buffer.from('just some notes, not a picture')), null],
+    ['an executable', new Uint8Array(Buffer.from('MZ ', 'binary')), null],
+    ['nothing at all', new Uint8Array(), null]
+  ]
+  let sniffed = 0
+  for (const [label, bytes, expected] of samples) {
+    const actual = sniffImageExtension(bytes)
+    if (actual === expected) sniffed += 1
+    else fail(`${label} sniffed as ${String(actual)}, expected ${String(expected)}`)
+  }
+  if (sniffed === samples.length) pass(`sniffed all ${samples.length} payloads by their bytes`)
+
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'notch-paste-'))
+  const first = await savePastedImage(dir, PNG)
+  const second = await savePastedImage(dir, PNG)
+  if (first && second && first !== second && path.extname(first) === '.png') {
+    pass('two pastes in the same second land on two different .png files')
+  } else {
+    fail(`pastes collided or were misnamed: ${String(first)} / ${String(second)}`)
+  }
+  if (first && fs.readFileSync(first).equals(Buffer.from(PNG))) {
+    pass('the saved file is the bytes that were pasted')
+  } else {
+    fail('the saved file does not match the pasted bytes')
+  }
+  if ((await savePastedImage(dir, new Uint8Array(Buffer.from('not an image')))) === null) {
+    pass('bytes that are not an image are refused rather than saved under a guess')
+  } else {
+    fail('a non-image was saved into the tray directory')
+  }
+  if (
+    isReadablePastedImagePayload('image/png', 1024) &&
+    !isReadablePastedImagePayload('image/png', 33 * 1024 * 1024) &&
+    !isReadablePastedImagePayload('application/octet-stream', 1024)
+  ) {
+    pass('renderer rejects oversized and non-image payloads before reading their bytes')
+  } else {
+    fail('renderer-side pasted-image admission is not bounded')
+  }
+  if (
+    isSafeMobileEndpointAddress('192.168.1.20') &&
+    isSafeMobileEndpointAddress('100.100.10.20') &&
+    !isSafeMobileEndpointAddress('169.254.4.5') &&
+    !isSafeMobileEndpointAddress('203.0.113.10')
+  ) {
+    pass('mobile bridge advertises private/VPN addresses but never public or link-local HTTP')
+  } else {
+    fail('mobile endpoint safety filter accepted or rejected the wrong address range')
+  }
+  await fs.promises.rm(dir, { recursive: true, force: true })
+}
+
+/**
+ * Model/effort overrides, argv shape only.
+ *
+ * The load-bearing assertion is the negative one: an untouched dispatch must
+ * emit exactly the argv it emitted before these selectors existed.
+ */
+function checkModelEffort(): void {
+  section('dispatcher model + effort (argv shape only — no launch)')
+  const base = {
+    agent: 'claude' as const,
+    cwd: 'C:\\proj',
+    prompt: 'ship it',
+    permissionMode: 'manual' as const
+  }
+
+  const tuned = buildClaudeArgs({
+    ...base,
+    claude: { model: 'opus', effort: 'xhigh' }
+  })
+  info(JSON.stringify(tuned))
+  const modelAt = tuned.indexOf('--model')
+  const effortAt = tuned.indexOf('--effort')
+  if (
+    modelAt >= 0 &&
+    tuned[modelAt + 1] === 'opus' &&
+    effortAt >= 0 &&
+    tuned[effortAt + 1] === 'xhigh' &&
+    tuned[tuned.length - 1] === 'ship it'
+  ) {
+    pass('Claude argv carries --model and --effort ahead of the prompt')
+  } else {
+    fail(`Claude model/effort argv is malformed: ${JSON.stringify(tuned)}`)
+  }
+
+  const untouched = buildClaudeArgs(base)
+  if (!untouched.includes('--model') && !untouched.includes('--effort')) {
+    pass('a Default model and effort emit no flags at all')
+  } else {
+    fail(`Default must be a no-op: ${JSON.stringify(untouched)}`)
+  }
+
+  const codexTuned = buildCodexArgs({
+    ...base,
+    agent: 'codex',
+    permissionMode: 'codex-on-request',
+    codex: { model: 'gpt-5.6-sol', effort: 'none' }
+  })
+  info(JSON.stringify(codexTuned))
+  const codexModelAt = codexTuned.indexOf('--model')
+  const configAt = codexTuned.indexOf('-c')
+  if (
+    codexModelAt >= 0 &&
+    codexTuned[codexModelAt + 1] === 'gpt-5.6-sol' &&
+    configAt >= 0 &&
+    codexTuned[configAt + 1] === 'model_reasoning_effort="none"' &&
+    codexTuned.includes('on-request')
+  ) {
+    pass('Codex argv carries --model and the effort config override, policy intact')
+  } else {
+    fail(`Codex model/effort argv is malformed: ${JSON.stringify(codexTuned)}`)
+  }
+
+  // A model id reaching the launcher must not be readable as a wt.exe flag.
+  const wrapped = buildWtArgs({ cwd: 'C:\\proj', exe: 'codex', args: codexTuned })
+  if (wrapped[2] === '--' && wrapped[3] === 'codex') {
+    pass('a tuned Codex argv still passes through the "--" terminator')
+  } else {
+    fail(`tuned argv broke the launcher terminator: ${JSON.stringify(wrapped)}`)
+  }
+
+  // The pair routes each side independently — that is the whole reason the
+  // request keys these by agent rather than by role.
+  const pair = buildAdversarialArgs({
+    agent: 'claude-codex',
+    cwd: 'C:\\proj',
+    prompt: 'split the work',
+    permissionMode: 'acceptEdits',
+    claude: { model: 'sonnet', effort: 'high' },
+    codex: { model: 'gpt-5.6', effort: 'low' }
+  })
+  const reviewerSandboxAt = pair.codexArgs.indexOf('--sandbox')
+  if (
+    pair.claudeArgs.includes('sonnet') &&
+    pair.claudeArgs.includes('high') &&
+    !pair.claudeArgs.includes('gpt-5.6') &&
+    pair.codexArgs.includes('gpt-5.6') &&
+    pair.codexArgs.includes('model_reasoning_effort="low"') &&
+    !pair.codexArgs.includes('sonnet')
+  ) {
+    pass('the pair routes each model/effort to the agent its key names')
+  } else {
+    fail(
+      `pair tuning leaked across agents: ${JSON.stringify(pair.claudeArgs)} / ${JSON.stringify(pair.codexArgs)}`
+    )
+  }
+  if (
+    reviewerSandboxAt >= 0 &&
+    pair.codexArgs[reviewerSandboxAt + 1] === 'read-only' &&
+    pair.codexArgs.includes('never')
+  ) {
+    pass('reviewer stays read-only with approvals disabled under a tuned pair')
+  } else {
+    fail(`tuning disturbed the reviewer sandbox: ${JSON.stringify(pair.codexArgs)}`)
+  }
+}
+
 async function main(): Promise<void> {
   await checkSessions()
   await checkDesign()
   await checkUsage()
   await checkHookInstall()
   await checkDispatch()
+  checkModelEffort()
+  await checkPastedImages()
 
   console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`)
   process.exit(failures === 0 ? 0 : 1)

@@ -1,7 +1,7 @@
 import type { Dirent } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { PROJECTS_DIR } from './usage'
+import { CLAUDE_USAGE_DIRS, PROJECTS_DIR } from './usage'
 
 /**
  * Claude Code names a session file after its PID and fills `name` with a slug
@@ -52,6 +52,18 @@ export async function findTranscript(dir: string, sessionId: string): Promise<st
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
     const found = await findTranscript(path.join(dir, entry.name), sessionId)
+    if (found) return found
+  }
+  return null
+}
+
+/** Looks through Claude's current and compatibility transcript roots in order. */
+export async function findTranscriptInRoots(
+  sessionId: string,
+  roots: readonly string[] = CLAUDE_USAGE_DIRS
+): Promise<string | null> {
+  for (const root of roots) {
+    const found = await findTranscript(root, sessionId)
     if (found) return found
   }
   return null
@@ -174,7 +186,7 @@ export class ClaudeTitleReader {
         // The cwd encoding is a fast path, not a contract.
       }
     }
-    if (!file) file = await findTranscript(PROJECTS_DIR, sessionId)
+    if (!file) file = await findTranscriptInRoots(sessionId)
     this.paths.set(sessionId, file)
     return file
   }
