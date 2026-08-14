@@ -381,22 +381,29 @@ function ingestCodexLine(aggregate: FileAggregate, record: Record<string, unknow
   }
 }
 
-function ingestLine(aggregate: FileAggregate, line: string, seen: Set<string>): void {
-  if (!line || line.charCodeAt(0) !== 123) return
-  if (
-    aggregate.agent === 'claude' &&
-    !line.includes('"output_tokens"')
-  ) {
-    return
+/** Whether a JSONL fragment is one complete object record. */
+export function isCompleteUsageRecord(line: string): boolean {
+  if (!line || line.charCodeAt(0) !== 123) return false
+  try {
+    const parsed = JSON.parse(line) as unknown
+    return Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed)
+  } catch {
+    return false
   }
+}
+
+function ingestLine(aggregate: FileAggregate, line: string, seen: Set<string>): boolean {
+  if (!isCompleteUsageRecord(line)) return false
+  if (aggregate.agent === 'claude' && !line.includes('"output_tokens"')) return true
   let record: Record<string, unknown>
   try {
     record = JSON.parse(line) as Record<string, unknown>
   } catch {
-    return
+    return false
   }
   if (aggregate.agent === 'claude') ingestClaudeLine(aggregate, record, seen)
   else ingestCodexLine(aggregate, record)
+  return true
 }
 
 function pruneEvents(aggregate: FileAggregate, now: number): void {
@@ -1013,7 +1020,11 @@ export class UsageScanner extends EventEmitter {
       aggregate = emptyAggregate(agent)
     } else if (stat.size < cached.offset) {
       aggregate = emptyAggregate(agent)
-    } else if (stat.size === cached.size && stat.mtimeMs === cached.mtimeMs) {
+    } else if (
+      stat.size === cached.size &&
+      stat.mtimeMs === cached.mtimeMs &&
+      cached.offset >= stat.size
+    ) {
       return
     } else {
       // Ingestion mutates nested totals as lines are parsed. Work on a private
@@ -1051,6 +1062,13 @@ export class UsageScanner extends EventEmitter {
           }
           carry = Buffer.from(combined.subarray(lineStart))
           await new Promise<void>((resolve) => setImmediate(resolve))
+        }
+        // JSONL permits the final record to omit a newline. Consume it when it
+        // is already complete; otherwise retain its bytes so an append can
+        // finish the record on the next pass.
+        if (carry.length > 0) {
+          const tail = carry.toString('utf8').replace(/\r$/, '')
+          if (ingestLine(aggregate, tail, seen)) carry = Buffer.alloc(0)
         }
         aggregate.offset = position - carry.length
         aggregate.seenKeys = [...seen]

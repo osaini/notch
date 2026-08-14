@@ -36,6 +36,7 @@ import { MobileBridge } from '../src/main/mobileBridge'
 import { SettingsStore } from '../src/main/settings'
 import { win32Platform } from '../src/main/platform/win32'
 import { priorityPillLabel } from '../src/renderer/pillStatus'
+import { isCompleteUsageRecord } from '../src/main/usage'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
   const started = Date.now()
@@ -1480,6 +1481,12 @@ function testSnapshotChangeDetection(): void {
   )
 }
 
+function testUsageJsonlTailDetection(): void {
+  assert.equal(isCompleteUsageRecord('{"type":"assistant"}'), true)
+  assert.equal(isCompleteUsageRecord('{"type":"assistant"'), false)
+  assert.equal(isCompleteUsageRecord('[]'), false)
+}
+
 async function main(): Promise<void> {
   await testClaudeNormalizationAndRoundTrip()
   await testHookAuthorization()
@@ -1499,6 +1506,7 @@ async function main(): Promise<void> {
   await testMobileBridgeSecurityAndLifecycle()
   testPriorityPillLabels()
   testSnapshotChangeDetection()
+  testUsageJsonlTailDetection()
   console.log('Interaction tests passed.')
 }
 
