@@ -1,7 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { spawn } from 'node:child_process'
 import fsp from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import type {
   AgentKind,
@@ -18,9 +17,7 @@ export const CLAUDE_USAGE_DIRS = [PROJECTS_DIR, CLAUDE_TRANSCRIPTS_DIR] as const
 export const CODEX_PROJECTS_DIR = AGENT_PATHS.codexSessions
 export const CODEX_ARCHIVED_PROJECTS_DIR = AGENT_PATHS.codexArchivedSessions
 export const CODEX_USAGE_DIRS = [CODEX_PROJECTS_DIR, CODEX_ARCHIVED_PROJECTS_DIR] as const
-const CLAUDE_CONFIG_PATH = process.env.CLAUDE_CONFIG_DIR
-  ? path.join(CLAUDE_CONFIG_DIR, '.claude.json')
-  : path.join(os.homedir(), '.claude.json')
+const CLAUDE_CONFIG_PATH = AGENT_PATHS.claudeProjectIndex
 const CLAUDE_CREDENTIALS_PATH = path.join(CLAUDE_CONFIG_DIR, '.credentials.json')
 const CLAUDE_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 
@@ -1010,15 +1007,19 @@ export class UsageScanner extends EventEmitter {
       return
     }
 
-    let aggregate = this.cache.files[file]
-    if (!aggregate || aggregate.agent !== agent) {
+    const cached = this.cache.files[file]
+    let aggregate: FileAggregate
+    if (!cached || cached.agent !== agent) {
       aggregate = emptyAggregate(agent)
-      this.cache.files[file] = aggregate
-    } else if (stat.size < aggregate.offset) {
+    } else if (stat.size < cached.offset) {
       aggregate = emptyAggregate(agent)
-      this.cache.files[file] = aggregate
-    } else if (stat.size === aggregate.size && stat.mtimeMs === aggregate.mtimeMs) {
+    } else if (stat.size === cached.size && stat.mtimeMs === cached.mtimeMs) {
       return
+    } else {
+      // Ingestion mutates nested totals as lines are parsed. Work on a private
+      // copy so a later read failure cannot preserve a prefix with the old
+      // offset and permanently count it again on the next pass.
+      aggregate = structuredClone(cached)
     }
 
     const start = aggregate.offset
@@ -1063,6 +1064,7 @@ export class UsageScanner extends EventEmitter {
     aggregate.size = stat.size
     aggregate.mtimeMs = stat.mtimeMs
     pruneEvents(aggregate, Date.now())
+    this.cache.files[file] = aggregate
   }
 
   private derive(planUsage: PlanUsage[]): UsageSnapshot {

@@ -503,38 +503,42 @@ export function App({ bridge }: AppProps): React.JSX.Element {
   const [selected, setSelected] = useState<SessionSummary | null>(null)
   const [showNewTask, setShowNewTask] = useState(false)
   const [filter, setFilter] = useState<'all' | 'active' | 'done'>('all')
+  const connectionGeneration = useRef(0)
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined
     let cancelled = false
+    const effectGeneration = ++connectionGeneration.current
     void (async () => {
       try {
         setConnectionError('')
         const status = await bridge.getStatus()
-        if (cancelled) return
+        if (cancelled || connectionGeneration.current !== effectGeneration) return
         setBridgeStatus(status)
         if (status.requiresPairing) return
         const next = await bridge.getSnapshot()
-        if (cancelled) return
+        if (cancelled || connectionGeneration.current !== effectGeneration) return
         setSnapshot(next)
         unsubscribe = bridge.subscribe(
           (value) => {
             if (cancelled) return
+            connectionGeneration.current++
             setSnapshot(value)
             setConnectionError('')
           },
           () => {
             if (cancelled) return
+            const probeGeneration = ++connectionGeneration.current
             setSnapshot((current) => current ? { ...current, connected: false } : current)
             void bridge.getStatus().then((latest) => {
-              if (cancelled) return
+              if (cancelled || connectionGeneration.current !== probeGeneration) return
               setBridgeStatus(latest)
               if (latest.requiresPairing) {
                 setSnapshot(null)
                 setConnectionError('This phone needs to be paired again.')
               }
             }).catch((error: unknown) => {
-              if (cancelled) return
+              if (cancelled || connectionGeneration.current !== probeGeneration) return
               setConnectionError(error instanceof Error ? error.message : 'Notch could not be reached.')
             })
           }
@@ -564,13 +568,19 @@ export function App({ bridge }: AppProps): React.JSX.Element {
   }, [filter, snapshot])
 
   useEffect(() => {
-    if (
-      selected &&
-      snapshot &&
-      !snapshot.sessions.some((session) => session.key === selected.key)
-    ) {
-      setSelected(null)
+    if (!selected || !snapshot) return
+    if (selected.key.startsWith('pending:')) {
+      const discovered = snapshot.sessions
+        .filter((session) =>
+          session.agent === selected.agent &&
+          session.project === selected.project &&
+          session.updatedAt >= selected.updatedAt
+        )
+        .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+      if (discovered) setSelected(discovered)
+      return
     }
+    if (!snapshot.sessions.some((session) => session.key === selected.key)) setSelected(null)
   }, [selected, snapshot])
 
   if (bridgeStatus?.requiresPairing) {
@@ -614,7 +624,8 @@ export function App({ bridge }: AppProps): React.JSX.Element {
   }
 
   const currentSelected = selected
-    ? snapshot.sessions.find((session) => session.key === selected.key) ?? null
+    ? snapshot.sessions.find((session) => session.key === selected.key) ??
+      (selected.key.startsWith('pending:') ? selected : null)
     : null
 
   if (currentSelected) {
@@ -700,7 +711,7 @@ export function App({ bridge }: AppProps): React.JSX.Element {
           onClose={() => setShowNewTask(false)}
           onCreated={(session) => {
             setShowNewTask(false)
-            if (session.canMessage) setSelected(session)
+            setSelected(session)
           }}
         />
       )}

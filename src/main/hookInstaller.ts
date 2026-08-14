@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import type { HookInstallStatus } from '@shared/types'
+import { AGENT_PATHS } from './agentPaths'
 import {
   HOOK_EVENTS,
   HOOK_INTENT_KEY,
@@ -15,7 +15,7 @@ import {
   hookUrl
 } from './hookServer'
 
-export const SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json')
+export const SETTINGS_PATH = path.join(AGENT_PATHS.claudeRoot, 'settings.json')
 /**
  * Created once, on the first install, and never overwritten — it is the
  * pristine pre-Notch copy of the user's real config.

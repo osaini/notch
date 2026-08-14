@@ -6,6 +6,7 @@ export interface AgentPaths {
   claudeSessions: string
   claudeProjects: string
   claudeTranscripts: string
+  claudeProjectIndex: string
   codexRoot: string
   codexSessions: string
   codexArchivedSessions: string
@@ -28,6 +29,8 @@ export function resolveAgentPaths(
   env: NodeJS.ProcessEnv = process.env,
   homeDir = os.homedir()
 ): AgentPaths {
+  const hasClaudeOverride =
+    typeof env.CLAUDE_CONFIG_DIR === 'string' && env.CLAUDE_CONFIG_DIR.trim().length > 0
   const claudeRoot = configuredRoot(env.CLAUDE_CONFIG_DIR, path.join(homeDir, '.claude'))
   const codexRoot = configuredRoot(env.CODEX_HOME, path.join(homeDir, '.codex'))
   return {
@@ -35,6 +38,9 @@ export function resolveAgentPaths(
     claudeSessions: path.join(claudeRoot, 'sessions'),
     claudeProjects: path.join(claudeRoot, 'projects'),
     claudeTranscripts: path.join(claudeRoot, 'transcripts'),
+    claudeProjectIndex: hasClaudeOverride
+      ? path.join(claudeRoot, '.claude.json')
+      : path.join(homeDir, '.claude.json'),
     codexRoot,
     codexSessions: path.join(codexRoot, 'sessions'),
     codexArchivedSessions: path.join(codexRoot, 'archived_sessions'),

@@ -51,7 +51,7 @@ import { resolveAgentPaths } from '../src/main/agentPaths'
 import { savePastedImage, sniffImageExtension } from '../src/main/pastedImages'
 import { isSafeMobileEndpointAddress } from '../src/main/mobileBridge'
 import { isReadablePastedImagePayload } from '../src/shared/types'
-import { shortPath } from '../src/renderer/format'
+import { compactTokens, shortPath } from '../src/renderer/format'
 
 const pass = (msg: string): void => console.log(`  PASS  ${msg}`)
 const fail = (msg: string): void => {
@@ -354,12 +354,25 @@ async function checkUsage(): Promise<void> {
   if (
     customRoots.claudeProjects === path.resolve('custom-claude', 'projects') &&
     customRoots.claudeTranscripts === path.resolve('custom-claude', 'transcripts') &&
+    customRoots.claudeProjectIndex === path.resolve('custom-claude', '.claude.json') &&
     customRoots.codexSessions === path.resolve('custom-codex', 'sessions') &&
     customRoots.codexArchivedSessions === path.resolve('custom-codex', 'archived_sessions')
   ) {
     pass('Claude and Codex data-root overrides cover every transcript location')
   } else {
     fail('agent data-root override resolution is inconsistent')
+  }
+  const whitespaceRoots = resolveAgentPaths(
+    { CLAUDE_CONFIG_DIR: '   ' },
+    path.join('fixture', 'home')
+  )
+  if (
+    whitespaceRoots.claudeRoot === path.join('fixture', 'home', '.claude') &&
+    whitespaceRoots.claudeProjectIndex === path.join('fixture', 'home', '.claude.json')
+  ) {
+    pass('blank Claude root overrides fall back consistently to the user home')
+  } else {
+    fail('blank Claude root override split the root and project index locations')
   }
   const rootsFixture = path.join(os.tmpdir(), `notch-usage-roots-${Date.now()}`)
   const activeRoot = path.join(rootsFixture, 'sessions')
@@ -998,6 +1011,12 @@ async function main(): Promise<void> {
     shortPath('C:\\Users\\alice\\repo') === '…\\alice\\repo'
   ) pass('short paths preserve POSIX and Windows separators')
   else fail('short paths use the wrong platform separator')
+  if (
+    compactTokens(999_949) === '999.9K' &&
+    compactTokens(999_950) === '1.0M' &&
+    compactTokens(999_950_000) === '1.0B'
+  ) pass('rounded token labels promote cleanly across unit boundaries')
+  else fail('token label rounding produced an invalid 1000-unit boundary')
   await checkSessions()
   await checkDesign()
   await checkUsage()

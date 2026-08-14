@@ -72,6 +72,8 @@ export interface SessionsSnapshot {
   /** Live sessions hidden because they parked into a background job. */
   parkedCount: number
   scannedAt: number
+  /** False when any session source could not be read completely this pass. */
+  authoritative?: boolean
   /** Set when the sessions directory could not be read at all. */
   error?: string
   /** Set when Claude Design window detection could not be kept running. */
@@ -308,6 +310,9 @@ export type DispatchTarget = AgentKind | 'claude-codex'
 
 /** The paired-agent workflows offered by the `claude-codex` target. */
 export type ComboWorkflow = 'bug-search' | 'adversarial'
+
+export const MAX_DISPATCH_PROMPT_CHARS = 100_000
+export const MAX_DISPATCH_ATTACHMENTS = 32
 
 export interface DispatchRequest {
   agent: DispatchTarget

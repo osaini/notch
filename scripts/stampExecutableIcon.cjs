@@ -36,6 +36,37 @@ module.exports = async function stampExecutableIcon(context) {
     )
   }
 
+  // signAndEditExecutable is disabled above, so electron-builder never gets a
+  // chance to replace Electron's stock VERSIONINFO block. Keep Explorer,
+  // Task Manager, crash reports, and shortcut properties aligned with the app.
+  const appInfo = context.packager.appInfo
+  const filename = `${appInfo.productFilename}.exe`
+  const version = appInfo.getVersionInWeirdWindowsForm()
+  const language = { lang: 1033, codepage: 1200 }
+  let versionInfos = ResEdit.Resource.VersionInfo.fromEntries(resources.entries)
+  if (versionInfos.length === 0) {
+    versionInfos = [
+      ResEdit.Resource.VersionInfo.create({
+        lang: language.lang,
+        fixedInfo: {},
+        strings: []
+      })
+    ]
+  }
+  for (const versionInfo of versionInfos) {
+    versionInfo.setFileVersion(version, language.lang)
+    versionInfo.setProductVersion(version, language.lang)
+    versionInfo.setStringValues(language, {
+      CompanyName: appInfo.companyName ?? 'Oaj Saini',
+      FileDescription: appInfo.description,
+      InternalName: filename,
+      LegalCopyright: appInfo.copyright,
+      OriginalFilename: filename,
+      ProductName: appInfo.productName
+    })
+    versionInfo.outputToResourceEntries(resources.entries)
+  }
+
   resources.outputResource(executable)
   await writeFile(temporaryPath, Buffer.from(executable.generate()))
   try {

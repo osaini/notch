@@ -22,6 +22,7 @@ import type {
   SessionsSnapshot,
   UsageSnapshot
 } from '@shared/types'
+import { MAX_DISPATCH_ATTACHMENTS, MAX_DISPATCH_PROMPT_CHARS } from '@shared/types'
 import { SessionWatcher } from './sessionWatcher'
 import { HookServer, DEFAULT_PORT, compareInteractions } from './hookServer'
 import {
@@ -99,7 +100,7 @@ function clearFollowUp(sessionId: string): void {
 function pruneFollowUps(snapshot: SessionsSnapshot): void {
   // A failed scan is not authoritative; keep cards until session liveness can
   // be established again instead of erasing a still-valid follow-up.
-  if (snapshot.error) return
+  if (snapshot.error || snapshot.authoritative === false) return
   const liveClaudeIds = new Set(
     snapshot.sessions
       .filter((session) => session.agent === 'claude')
@@ -198,8 +199,6 @@ const CODEX_EFFORTS = new Set<string>(['none', 'low', 'medium', 'high', 'xhigh',
  * being read as another flag by the agent or by the terminal launcher.
  */
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}$/
-const MAX_PROMPT_CHARS = 100_000
-const MAX_ATTACHMENTS = 32
 
 /**
  * Shape-checks one agent's model/effort override.
@@ -239,13 +238,19 @@ function parseDispatchRequest(raw: unknown): DispatchRequest | null {
   if (!DISPATCH_TARGETS.has(value.agent as DispatchTarget)) return null
   if (!PERMISSION_MODES.has(value.permissionMode as PermissionMode)) return null
   if (typeof value.cwd !== 'string' || !value.cwd) return null
-  if (typeof value.prompt !== 'string' || value.prompt.length > MAX_PROMPT_CHARS) return null
+  if (
+    typeof value.prompt !== 'string' ||
+    value.prompt.length > MAX_DISPATCH_PROMPT_CHARS
+  ) return null
   if (value.comboWorkflow !== undefined && !COMBO_WORKFLOWS.has(value.comboWorkflow as ComboWorkflow)) {
     return null
   }
   let attachments: string[] | undefined
   if (value.attachments !== undefined) {
-    if (!Array.isArray(value.attachments) || value.attachments.length > MAX_ATTACHMENTS) return null
+    if (
+      !Array.isArray(value.attachments) ||
+      value.attachments.length > MAX_DISPATCH_ATTACHMENTS
+    ) return null
     if (!value.attachments.every((item) => typeof item === 'string' && path.isAbsolute(item))) {
       return null
     }
@@ -399,7 +404,7 @@ function registerIpc(): void {
     }
   )
   ipcMain.handle('notch:advanceInteraction', (_event, id: string) =>
-    hookServer.extendInteraction(id)
+    hookServer.extendInteraction(id) || managedCodex.advanceInteraction(id)
   )
   ipcMain.handle(
     'notch:openInteractionSession',

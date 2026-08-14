@@ -395,6 +395,7 @@ export class MobileBridge extends EventEmitter {
   private broadcastQueued = false
   /** Serializes snapshot generation and writes so an older async snapshot cannot overtake a newer one. */
   private broadcastWork: Promise<void> = Promise.resolve()
+  private deviceSaveWork: Promise<void> = Promise.resolve()
   private watcherListener: (() => void) | null = null
   /** Cached result of the last routing probe. See probePreferredAddress(). */
   private preferredAddress: string | null = null
@@ -818,7 +819,7 @@ export class MobileBridge extends EventEmitter {
     if (text.length > 20_000) throw new HttpError(413, 'Message is too long.')
     const session = this.sessionFor(key)
     if (!canResume(session)) throw new HttpError(409, 'This session is read-only.')
-    if (this.runningSessions.has(key) || session.status === 'busy' || session.needsInput) {
+    if (this.runningSessions.has(key) || session.status !== 'idle' || session.needsInput) {
       throw new HttpError(409, 'Wait until the agent is idle before sending a follow-up.')
     }
 
@@ -911,6 +912,7 @@ export class MobileBridge extends EventEmitter {
           .sessions.filter((session) => session.agent === agent)
           .map((session) => session.key)
       )
+      const dispatchedAt = Date.now()
       const result = await this.options.dispatch({
         agent,
         cwd: selected,
@@ -932,7 +934,7 @@ export class MobileBridge extends EventEmitter {
         path: selected,
         status: 'working',
         detail: 'Started in Windows Terminal; waiting for its session record',
-        updatedAt: Date.now(),
+        updatedAt: dispatchedAt,
         canMessage: false
       }
     })
@@ -1133,13 +1135,18 @@ export class MobileBridge extends EventEmitter {
   }
 
   private async saveDevices(): Promise<void> {
-    await fsp.mkdir(path.dirname(this.devicesPath), { recursive: true })
-    const temporary = `${this.devicesPath}.tmp`
-    await fsp.writeFile(
-      temporary,
-      `${JSON.stringify({ devices: this.devices }, null, 2)}\n`,
-      'utf8'
-    )
-    await fsp.rename(temporary, this.devicesPath)
+    const save = this.deviceSaveWork.then(async () => {
+      await fsp.mkdir(path.dirname(this.devicesPath), { recursive: true })
+      const temporary = `${this.devicesPath}.tmp`
+      await fsp.writeFile(
+        temporary,
+        `${JSON.stringify({ devices: this.devices }, null, 2)}\n`,
+        'utf8'
+      )
+      await fsp.rename(temporary, this.devicesPath)
+    })
+    // A failed write must reject its caller but not poison later persistence.
+    this.deviceSaveWork = save.catch(() => undefined)
+    return save
   }
 }

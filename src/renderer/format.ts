@@ -1,9 +1,19 @@
 /** Small display helpers shared by the tabs. */
 
 export function compactTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  const units = ['', 'K', 'M', 'B']
+  let value = n
+  let unit = 0
+  while (Math.abs(value) >= 1_000 && unit < units.length - 1) {
+    value /= 1_000
+    unit++
+  }
+  let rounded = Number(value.toFixed(1))
+  if (Math.abs(rounded) >= 1_000 && unit < units.length - 1) {
+    rounded /= 1_000
+    unit++
+  }
+  if (unit > 0) return `${rounded.toFixed(1)}${units[unit]}`
   return `${n}`
 }
 

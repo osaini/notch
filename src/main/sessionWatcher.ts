@@ -126,26 +126,25 @@ export function matchCodexTuiProcesses(
   }
 
   const MAX_START_DELTA_MS = 60_000
-  while (remainingSessions.length > 0 && remainingProcesses.length > 0) {
-    let bestSession = -1
-    let bestProcess = -1
-    let bestDelta = Number.POSITIVE_INFINITY
-    for (let sessionIndex = 0; sessionIndex < remainingSessions.length; sessionIndex++) {
-      for (let processIndex = 0; processIndex < remainingProcesses.length; processIndex++) {
-        const delta = Math.abs(
-          remainingSessions[sessionIndex].startedAt - remainingProcesses[processIndex].startedAt
-        )
-        if (delta < bestDelta) {
-          bestDelta = delta
-          bestSession = sessionIndex
-          bestProcess = processIndex
-        }
-      }
+  remainingSessions.sort((left, right) => left.startedAt - right.startedAt)
+  remainingProcesses.sort((left, right) => left.startedAt - right.startedAt)
+  let sessionIndex = 0
+  let processIndex = 0
+  // For points on one timeline with a fixed validity window, pairing the
+  // earliest mutually compatible entries maximizes cardinality. A global
+  // nearest-pair greedy can consume the middle process and strand both ends.
+  while (sessionIndex < remainingSessions.length && processIndex < remainingProcesses.length) {
+    const session = remainingSessions[sessionIndex]
+    const process = remainingProcesses[processIndex]
+    if (process.startedAt < session.startedAt - MAX_START_DELTA_MS) {
+      processIndex++
+    } else if (session.startedAt < process.startedAt - MAX_START_DELTA_MS) {
+      sessionIndex++
+    } else {
+      matches.set(session.key, process)
+      sessionIndex++
+      processIndex++
     }
-    if (bestDelta > MAX_START_DELTA_MS) break
-    const [session] = remainingSessions.splice(bestSession, 1)
-    const [process] = remainingProcesses.splice(bestProcess, 1)
-    matches.set(session.key, process)
   }
 
   return matches
@@ -491,20 +490,33 @@ export function toDesignSessions(
   })
 }
 
-async function listJsonl(dir: string): Promise<string[]> {
+interface JsonlListing {
+  files: string[]
+  authoritative: boolean
+}
+
+async function listJsonl(dir: string): Promise<JsonlListing> {
   const output: string[] = []
   let entries: fs.Dirent[]
   try {
     entries = await fsp.readdir(dir, { withFileTypes: true })
-  } catch {
-    return output
+  } catch (error) {
+    return {
+      files: output,
+      authoritative: (error as NodeJS.ErrnoException).code === 'ENOENT'
+    }
   }
+  let authoritative = true
   for (const entry of entries) {
     const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) output.push(...(await listJsonl(full)))
+    if (entry.isDirectory()) {
+      const nested = await listJsonl(full)
+      output.push(...nested.files)
+      authoritative = nested.authoritative && authoritative
+    }
     else if (entry.isFile() && entry.name.endsWith('.jsonl')) output.push(full)
   }
-  return output
+  return { files: output, authoritative }
 }
 
 /**
@@ -771,7 +783,10 @@ export class SessionWatcher extends EventEmitter {
           continue
         }
         const parsed = parseClaudeSession(file, text)
-        if (!parsed) continue
+        if (!parsed) {
+          claudeScanAuthoritative = false
+          continue
+        }
         const { session } = parsed
         if (!session.pid || !isPidAlive(session.pid)) {
           pruned++
@@ -824,18 +839,38 @@ export class SessionWatcher extends EventEmitter {
       }
     }
 
-    const [codexFiles, codexTitles, codexTuiProcesses] = await Promise.all([
+    const [codexListing, codexTitles, codexTuiProcesses] = await Promise.all([
       listJsonl(CODEX_SESSIONS_DIR),
       readCodexTitleIndex(),
       listCodexTuiProcesses()
     ])
+    let codexScanAuthoritative = codexListing.authoritative
+    const codexFiles = new Set(codexListing.files)
+    if (!codexScanAuthoritative) {
+      for (const cachedFile of this.codexCache.keys()) codexFiles.add(cachedFile)
+    }
     const codexRows: { session: SessionState; interactions: PendingInteraction[] }[] = []
-    const knownCodexFiles = new Set(codexFiles)
+    const appendCachedCodexRow = (cached: CodexCacheEntry | undefined): void => {
+      const cachedSession = cached?.parsed.session
+      if (!cachedSession || !cached) return
+      const indexedTitle = codexTitles.get(cachedSession.sessionId)
+      codexRows.push({
+        // Process matching annotates rows with a PID below. Never let that
+        // sweep-specific field leak back into the persistent parse cache.
+        session: {
+          ...cachedSession,
+          ...(indexedTitle ? { name: indexedTitle } : {})
+        },
+        interactions: cached.parsed.interactions
+      })
+    }
     for (const file of codexFiles) {
       let stat: fs.Stats
       try {
         stat = await fsp.stat(file)
       } catch {
+        codexScanAuthoritative = false
+        appendCachedCodexRow(this.codexCache.get(file))
         continue
       }
       let cached = this.codexCache.get(file)
@@ -844,28 +879,29 @@ export class SessionWatcher extends EventEmitter {
         try {
           text = await fsp.readFile(file, 'utf8')
         } catch {
+          codexScanAuthoritative = false
+          appendCachedCodexRow(cached)
+          continue
+        }
+        const parsed = parseCodexRollout(file, text, stat.mtimeMs)
+        if (!parsed.session && text.trim()) {
+          codexScanAuthoritative = false
+          appendCachedCodexRow(cached)
           continue
         }
         cached = {
           size: stat.size,
           mtimeMs: stat.mtimeMs,
-          parsed: parseCodexRollout(file, text, stat.mtimeMs)
+          parsed
         }
         this.codexCache.set(file, cached)
       }
-      const cachedSession = cached.parsed.session
-      const indexedTitle = cachedSession ? codexTitles.get(cachedSession.sessionId) : undefined
-      if (!cachedSession) continue
-      codexRows.push({
-        session: {
-          ...cachedSession,
-          ...(indexedTitle ? { name: indexedTitle } : {})
-        },
-        interactions: cached.parsed.interactions
-      })
+      appendCachedCodexRow(cached)
     }
-    for (const file of [...this.codexCache.keys()]) {
-      if (!knownCodexFiles.has(file)) this.codexCache.delete(file)
+    if (codexScanAuthoritative) {
+      for (const file of [...this.codexCache.keys()]) {
+        if (!codexFiles.has(file)) this.codexCache.delete(file)
+      }
     }
 
     const codexInteractions: PendingInteraction[] = []
@@ -940,6 +976,7 @@ export class SessionWatcher extends EventEmitter {
       prunedCount: pruned,
       parkedCount: sessions.length - visible.length,
       scannedAt: Date.now(),
+      authoritative: claudeScanAuthoritative && codexScanAuthoritative,
       error,
       designError: this.design.getError()
     })
@@ -954,6 +991,7 @@ export class SessionWatcher extends EventEmitter {
       prunedCount: snapshot.prunedCount,
       parkedCount: snapshot.parkedCount,
       scannedAt: snapshot.scannedAt,
+      authoritative: snapshot.authoritative,
       error: snapshot.error,
       designError: snapshot.designError
     })

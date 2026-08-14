@@ -3,6 +3,7 @@ import {
   CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_FALLBACK,
   LAUNCHER_LABELS,
+  MAX_DISPATCH_PROMPT_CHARS,
   type AgentTuning,
   type AgentVersions,
   type ClaudeEffort,
@@ -273,11 +274,12 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
         <span className="field-label">Prompt</span>
         <textarea
           rows={5}
+          maxLength={MAX_DISPATCH_PROMPT_CHARS}
           value={prompt}
           placeholder={`What should ${target.short} do?`}
           onChange={(event) => {
             promptRevision.current++
-            setPrompt(event.target.value)
+            setPrompt(event.target.value.slice(0, MAX_DISPATCH_PROMPT_CHARS))
           }}
         />
       </label>

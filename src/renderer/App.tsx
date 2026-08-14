@@ -7,6 +7,7 @@ import type {
   SessionsSnapshot,
   UsageSnapshot
 } from '@shared/types'
+import { MAX_DISPATCH_ATTACHMENTS } from '@shared/types'
 import { Sessions, InteractionTakeover } from './tabs/Sessions'
 import { Usage } from './tabs/Usage'
 import { Dispatch } from './tabs/Dispatch'
@@ -82,7 +83,7 @@ export function App(): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [tab, setTab] = useState<TabId>('sessions')
   const [attachments, setAttachments] = useState<string[]>([])
-  const [dismissedInteraction, setDismissedInteraction] = useState<string | null>(null)
+  const [dismissedInteractions, setDismissedInteractions] = useState<string[]>([])
   const [confirmation, setConfirmation] = useState<string | null>(null)
   const [sessionsReady, setSessionsReady] = useState(false)
   const [interactionsReady, setInteractionsReady] = useState(false)
@@ -101,17 +102,21 @@ export function App(): React.JSX.Element {
   const [activeId, setActiveId] = useState<string | null>(null)
   useEffect(() => {
     setActiveId((current) =>
-      current && interactions.some((candidate) => candidate.id === current)
+      current &&
+      interactions.some((candidate) => candidate.id === current) &&
+      !dismissedInteractions.includes(current)
         ? current
-        : interactions[0]?.id ?? null
+        : interactions.find((candidate) => !dismissedInteractions.includes(candidate.id))
+            ?.id ?? null
     )
-  }, [interactions])
+  }, [dismissedInteractions, interactions])
 
   const activeInteraction =
-    interactions.find((candidate) => candidate.id === activeId) ?? interactions[0]
-  const takeover = Boolean(
-    activeInteraction && activeInteraction.id !== dismissedInteraction
-  )
+    interactions.find(
+      (candidate) =>
+        candidate.id === activeId && !dismissedInteractions.includes(candidate.id)
+    ) ?? interactions.find((candidate) => !dismissedInteractions.includes(candidate.id))
+  const takeover = Boolean(activeInteraction)
   const dragging = drag?.active ?? false
   // The panel rides along collapsed: dragging a 476px sheet around feels heavy,
   // and the pill is the only part the gesture is about.
@@ -208,19 +213,18 @@ export function App(): React.JSX.Element {
   }, [turn])
 
   useEffect(() => {
-    if (
-      dismissedInteraction &&
-      !interactions.some((interaction) => interaction.id === dismissedInteraction)
-    ) {
-      setDismissedInteraction(null)
-    }
-  }, [dismissedInteraction, interactions])
+    setDismissedInteractions((current) => {
+      const liveIds = new Set(interactions.map((interaction) => interaction.id))
+      const next = current.filter((id) => liveIds.has(id))
+      return next.length === current.length ? current : next
+    })
+  }, [interactions])
 
-  useEffect(() => {
-    if (!dismissedInteraction || activeId !== dismissedInteraction) return
-    const next = interactions.find((interaction) => interaction.id !== dismissedInteraction)
-    if (next) setActiveId(next.id)
-  }, [activeId, dismissedInteraction, interactions])
+  const dismissInteraction = useCallback((id: string): void => {
+    setDismissedInteractions((current) =>
+      current.includes(id) ? current : [...current, id]
+    )
+  }, [])
 
   useEffect(() => {
     if (!confirmation) return
@@ -284,7 +288,7 @@ export function App(): React.JSX.Element {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         if (takeover && activeInteraction) {
-          setDismissedInteraction(activeInteraction.id)
+          dismissInteraction(activeInteraction.id)
           return
         }
         setExpanded(false)
@@ -292,7 +296,7 @@ export function App(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [activeInteraction, takeover])
+  }, [activeInteraction, dismissInteraction, takeover])
 
   const label = useMemo(() => {
     return priorityPillLabel(snapshot.counts, interactions.length)
@@ -313,7 +317,9 @@ export function App(): React.JSX.Element {
   }, [hooks])
 
   const addAttachments = useCallback((paths: string[]) => {
-    setAttachments((previous) => [...new Set([...previous, ...paths])])
+    setAttachments((previous) =>
+      [...new Set([...previous, ...paths])].slice(0, MAX_DISPATCH_ATTACHMENTS)
+    )
   }, [])
 
   // Panel-wide, not Tray-pane-only: a screenshot is usually pasted mid-sentence
@@ -492,14 +498,14 @@ export function App(): React.JSX.Element {
               <InteractionTakeover
                 interaction={activeInteraction}
                 queueCount={interactions.length}
-                onDismiss={() => setDismissedInteraction(activeInteraction.id)}
+                onDismiss={() => dismissInteraction(activeInteraction.id)}
                 onResponseAccepted={() => {
-                  setDismissedInteraction(activeInteraction.id)
+                  dismissInteraction(activeInteraction.id)
                   setConfirmation(activeInteraction.id)
                   setExpanded(false)
                 }}
                 onOpenAgent={() => {
-                  setDismissedInteraction(activeInteraction.id)
+                  dismissInteraction(activeInteraction.id)
                   setExpanded(false)
                 }}
               />
@@ -520,10 +526,10 @@ export function App(): React.JSX.Element {
                       onClick={() => {
                         if (
                           item.id === 'sessions' &&
-                          dismissedInteraction &&
+                          dismissedInteractions.length > 0 &&
                           interactions.length > 0
                         ) {
-                          setDismissedInteraction(null)
+                          setDismissedInteractions([])
                         } else {
                           setTab(item.id)
                         }

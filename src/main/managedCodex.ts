@@ -230,6 +230,12 @@ export class ManagedCodexService extends EventEmitter {
     return [...this.requests.values()].map((entry) => entry.interaction)
   }
 
+  advanceInteraction(id: string): boolean {
+    // The app-server owns auto-resolution deadlines and exposes no extension
+    // RPC. Advancing is still valid while the request itself remains pending.
+    return this.requests.has(id)
+  }
+
   ownsSession(sessionId: string): boolean {
     return this.threads.has(sessionId)
   }

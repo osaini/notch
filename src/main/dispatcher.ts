@@ -1,5 +1,4 @@
 import fsp from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import type {
   DispatchRequest,
@@ -357,7 +356,7 @@ export async function getRecentProjects(sessions: SessionState[]): Promise<strin
   for (const session of sessions) add(session.cwd)
 
   try {
-    const text = await fsp.readFile(path.join(os.homedir(), '.claude.json'), 'utf8')
+    const text = await fsp.readFile(AGENT_PATHS.claudeProjectIndex, 'utf8')
     const config = JSON.parse(text) as { projects?: Record<string, unknown> }
     for (const dir of Object.keys(config.projects ?? {})) add(dir)
   } catch {

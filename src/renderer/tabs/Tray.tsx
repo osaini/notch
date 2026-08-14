@@ -102,8 +102,12 @@ function leaf(path: string): string {
 }
 
 function parent(path: string): string {
-  const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/)
-  return parts.slice(0, -1).join('\\')
+  const trimmed = path.replace(/[\\/]+$/, '')
+  const boundary = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  if (boundary < 0) return ''
+  if (boundary === 0) return trimmed[0]
+  if (boundary === 2 && /^[A-Za-z]:[\\/]/.test(trimmed)) return trimmed.slice(0, 3)
+  return trimmed.slice(0, boundary)
 }
 
 function extension(name: string): string {

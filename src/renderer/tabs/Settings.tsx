@@ -51,7 +51,7 @@ export function Settings({
 }: Props): React.JSX.Element {
   const platformInfo = usePlatform()
   const [displays, setDisplays] = useState<DisplayOption[]>([])
-  const [saving, setSaving] = useState(false)
+  const [pendingPositionSaves, setPendingPositionSaves] = useState(0)
   const [mobile, setMobile] = useState<MobileBridgeStatus | null>(null)
   const [pairingClock, setPairingClock] = useState(Date.now())
   /** Which endpoint the QR encodes. Null follows the bridge's recommendation. */
@@ -89,12 +89,12 @@ export function Settings({
       : (selected?.url ?? '')
 
   const updatePosition = async (patch: Partial<NotchPosition>): Promise<void> => {
-    setSaving(true)
+    setPendingPositionSaves((count) => count + 1)
     try {
       const next = await window.notch.updateSettings({ position: patch })
       onChange(next)
     } finally {
-      setSaving(false)
+      setPendingPositionSaves((count) => Math.max(0, count - 1))
     }
   }
 
@@ -136,7 +136,7 @@ export function Settings({
       </div>
 
       <div className="section-rule">
-        <span>Where it lives</span><i /><em>{saving ? 'Saving…' : 'Drag anytime'}</em>
+        <span>Where it lives</span><i /><em>{pendingPositionSaves > 0 ? 'Saving…' : 'Drag anytime'}</em>
       </div>
       <div className="position-control">
         <div className="monitor-grid" aria-label="Notch position presets">

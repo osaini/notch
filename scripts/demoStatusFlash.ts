@@ -70,8 +70,8 @@ async function main(): Promise<void> {
     )
   }
 
-  await fs.mkdir(sessionsDir, { recursive: true })
   try {
+    await fs.mkdir(sessionsDir, { recursive: true })
     console.log('Demo: GREEN — new idle agent')
     await writeStatus('idle')
     await pause(2300)

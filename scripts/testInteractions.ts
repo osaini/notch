@@ -735,6 +735,18 @@ function testCodexTuiProcessMatching(): void {
   assert.equal(matches.get(direct.key)?.pid, 202)
   assert.equal(matches.has(stale.key), false)
   assert.equal(matches.has(desktop.key), false)
+
+  const earlier = session('thread-earlier', 0)
+  const later = session('thread-later', 50_000)
+  const cardinalityMatches = matchCodexTuiProcesses(
+    [earlier, later],
+    [
+      { pid: 303, startedAt: 40_000, commandLine: 'codex' },
+      { pid: 404, startedAt: 100_000, commandLine: 'codex' }
+    ]
+  )
+  assert.equal(cardinalityMatches.get(earlier.key)?.pid, 303)
+  assert.equal(cardinalityMatches.get(later.key)?.pid, 404)
 }
 
 async function testManagedCodexDispatchLaunch(): Promise<void> {
@@ -987,6 +999,7 @@ async function testManagedCodexProtocol(): Promise<void> {
   )
   const interaction = first.getPendingInteractions()[0]
   assert.ok(interaction.expiresAt && interaction.expiresAt > Date.now())
+  assert.equal(first.advanceInteraction(interaction.id), true)
   assert.equal(
     first.respond(interaction.id, {
       kind: 'questions',
@@ -1003,6 +1016,7 @@ async function testManagedCodexProtocol(): Promise<void> {
   assert.deepEqual(winningResult, {
     answers: { choice: { answers: ['Yes'] } }
   })
+  assert.equal(first.advanceInteraction(interaction.id), false)
   assert.equal(
     second.respond(interaction.id, {
       kind: 'questions',
@@ -1302,6 +1316,11 @@ async function testMobileBridgeSecurityAndLifecycle(): Promise<void> {
     spawnedFollowups[0].emit('spawn')
     assert.equal((await firstFollowup).status, 202)
     spawnedFollowups[0].emit('exit', 0)
+
+    sessions = [{ ...sessions[0], status: 'reviewing' }]
+    const reviewingFollowup = await sendFollowup()
+    assert.equal(reviewingFollowup.status, 409)
+    assert.equal(spawnedFollowups.length, 1)
 
     // The initial SSE snapshot captures A, then waits on project discovery.
     // An update to B during that wait must be delivered afterward and in order.

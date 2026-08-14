@@ -129,6 +129,9 @@ export function uninstallLauncher(): LauncherStatus {
 function main(): void {
   const action = process.argv[2] ?? 'status'
   try {
+    if (!['install', 'uninstall', 'status'].includes(action)) {
+      throw new Error(`Unknown launcher action "${action}". Expected install, uninstall, or status.`)
+    }
     // Guard here rather than in each export: the failure otherwise surfaces as
     // "APPDATA is not set", which reads like a broken environment instead of a
     // Windows-only script run on the wrong OS.
