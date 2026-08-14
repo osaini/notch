@@ -250,6 +250,38 @@ function canResume(session: SessionState): boolean {
   return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(session.sessionId)
 }
 
+/** CLI argv for a phone-sent follow-up, with prompt text kept positional. */
+export function buildMobileFollowupArgs(
+  agent: 'claude' | 'codex',
+  sessionId: string,
+  text: string
+): string[] {
+  return agent === 'claude'
+    ? [
+        '-p',
+        '--resume',
+        sessionId,
+        '--permission-mode',
+        'dontAsk',
+        '--output-format',
+        'json',
+        '--',
+        text
+      ]
+    : [
+        'exec',
+        '--sandbox',
+        'workspace-write',
+        '-c',
+        'approval_policy="never"',
+        '--json',
+        'resume',
+        sessionId,
+        '--',
+        text
+      ]
+}
+
 function mimeType(file: string): string {
   switch (path.extname(file).toLowerCase()) {
     case '.html':
@@ -827,29 +859,11 @@ export class MobileBridge extends EventEmitter {
       throw new HttpError(409, 'Wait until the agent is idle before sending a follow-up.')
     }
 
-    const args =
-      session.agent === 'claude'
-        ? [
-            '-p',
-            '--resume',
-            session.sessionId,
-            '--permission-mode',
-            'dontAsk',
-            '--output-format',
-            'json',
-            text
-          ]
-        : [
-            'exec',
-            '--sandbox',
-            'workspace-write',
-            '-c',
-            'approval_policy="never"',
-            'resume',
-            session.sessionId,
-            text,
-            '--json'
-          ]
+    const args = buildMobileFollowupArgs(
+      session.agent === 'claude' ? 'claude' : 'codex',
+      session.sessionId,
+      text
+    )
 
     // Reserve the session before spawning. `spawn` does not report success until
     // a later event, and two paired phones can otherwise both pass the idle

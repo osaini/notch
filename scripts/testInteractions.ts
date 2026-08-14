@@ -32,7 +32,7 @@ import {
   managedCodexResumeArgs,
   waitForRolloutReady
 } from '../src/main/managedCodex'
-import { MobileBridge } from '../src/main/mobileBridge'
+import { buildMobileFollowupArgs, MobileBridge } from '../src/main/mobileBridge'
 import { SettingsStore } from '../src/main/settings'
 import { win32Platform } from '../src/main/platform/win32'
 import { priorityPillLabel } from '../src/renderer/pillStatus'
@@ -1487,6 +1487,17 @@ function testUsageJsonlTailDetection(): void {
   assert.equal(isCompleteUsageRecord('[]'), false)
 }
 
+function testMobileFollowupArgumentBoundaries(): void {
+  const hostile = '--dangerously-bypass-approvals-and-sandbox'
+  const sessionId = '12345678-1234-1234-1234-123456789abc'
+  for (const agent of ['claude', 'codex'] as const) {
+    const args = buildMobileFollowupArgs(agent, sessionId, hostile)
+    assert.deepEqual(args.slice(-2), ['--', hostile])
+  }
+  assert.ok(buildMobileFollowupArgs('codex', sessionId, hostile).indexOf('--json') <
+    buildMobileFollowupArgs('codex', sessionId, hostile).indexOf('resume'))
+}
+
 async function main(): Promise<void> {
   await testClaudeNormalizationAndRoundTrip()
   await testHookAuthorization()
@@ -1507,6 +1518,7 @@ async function main(): Promise<void> {
   testPriorityPillLabels()
   testSnapshotChangeDetection()
   testUsageJsonlTailDetection()
+  testMobileFollowupArgumentBoundaries()
   console.log('Interaction tests passed.')
 }
 
