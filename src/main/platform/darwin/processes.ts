@@ -1,6 +1,11 @@
 import type { ProcessIntegration } from '../types'
 
 export const processes: ProcessIntegration = {
+  async validateClaudeProcess() {
+    // Safe degradation until a creation-time-aware `ps` parser exists: an
+    // unverified PID must never be killed.
+    return null
+  },
   /**
    * TODO(macos): implement with `ps -axo pid=,etime=,command=`, filtering for
    * `codex` and excluding `app-server` with the same regex win32 uses. Prefer

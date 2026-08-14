@@ -100,7 +100,7 @@ function clearFollowUp(sessionId: string): void {
 function pruneFollowUps(snapshot: SessionsSnapshot): void {
   // A failed scan is not authoritative; keep cards until session liveness can
   // be established again instead of erasing a still-valid follow-up.
-  if (snapshot.error || snapshot.authoritative === false) return
+  if (snapshot.error || snapshot.claudeAuthoritative === false) return
   const liveClaudeIds = new Set(
     snapshot.sessions
       .filter((session) => session.agent === 'claude')
@@ -612,7 +612,7 @@ app.whenReady().then(async () => {
     void queueMobileBridgeSetting(next)
     notch.send('notch:settings', next)
   })
-  applyLoginSetting(settings)
+  if (settingsStore.canApplyStartupSideEffects()) applyLoginSetting(settings)
   applyThemeSetting(settings)
   nativeTheme.on('updated', () => {
     if (settingsStore?.get().theme === 'system') {

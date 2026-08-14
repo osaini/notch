@@ -408,6 +408,10 @@ button {
   color: var(--blue);
 }
 
+.status-label.unknown {
+  color: var(--muted);
+}
+
 .open-label {
   color: #9a9087;
   font-size: 11px;

@@ -47,7 +47,7 @@ import {
 // The Windows argv builders are imported from the win32 platform explicitly, not
 // through `platform`, so these assertions keep covering Windows on any host OS.
 import { buildPairWtArgs, buildWtArgs } from '../src/main/platform/win32/terminal'
-import { resolveAgentPaths } from '../src/main/agentPaths'
+import { AGENT_PATHS, resolveAgentPaths } from '../src/main/agentPaths'
 import { savePastedImage, sniffImageExtension } from '../src/main/pastedImages'
 import { isSafeMobileEndpointAddress } from '../src/main/mobileBridge'
 import { isReadablePastedImagePayload } from '../src/shared/types'
@@ -145,7 +145,7 @@ async function checkSessions(): Promise<void> {
     info(`  pid ${s.pid} ${s.status.padEnd(11)} ${s.kind.padEnd(11)} ${s.name}`)
   }
 
-  const onDisk = fs.readdirSync(path.join(os.homedir(), '.claude', 'sessions')).filter((f) => f.endsWith('.json'))
+  const onDisk = fs.readdirSync(AGENT_PATHS.claudeSessions).filter((f) => f.endsWith('.json'))
   const claudeSessions = snap.sessions.filter((session) => session.agent === 'claude')
   // Parked parents are live files we deliberately hide, so they are accounted
   // for here rather than weakening the invariant to a range.
@@ -170,7 +170,7 @@ async function checkSessions(): Promise<void> {
     let slug = ''
     try {
       const raw = JSON.parse(
-        fs.readFileSync(path.join(os.homedir(), '.claude', 'sessions', `${session.pid}.json`), 'utf8')
+        fs.readFileSync(path.join(AGENT_PATHS.claudeSessions, `${session.pid}.json`), 'utf8')
       ) as { name?: string; nameSource?: string }
       const deliberate = raw.nameSource === 'user' || raw.nameSource === 'auto'
       slug = deliberate ? '' : raw.name ?? ''

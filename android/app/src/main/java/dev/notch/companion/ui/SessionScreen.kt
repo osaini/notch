@@ -14,6 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import dev.notch.companion.data.Message
 import dev.notch.companion.data.NotchRepository
 import dev.notch.companion.data.SessionStatus
@@ -29,6 +32,7 @@ fun SessionScreen(
   onBack: () -> Unit
 ) {
   val scope = rememberCoroutineScope()
+  val lifecycleOwner = LocalLifecycleOwner.current
   var messages by remember { mutableStateOf<List<Message>>(emptyList()) }
   var draft by rememberSaveable(session.key) { mutableStateOf("") }
   var sending by remember { mutableStateOf(false) }
@@ -38,17 +42,19 @@ fun SessionScreen(
 
   // The transcript has no push channel of its own — the SSE stream carries
   // session status, not message bodies — so this polls while the screen is up.
-  LaunchedEffect(session.key) {
-    while (true) {
-      runCatching { repo.client.messages(session.key) }
-        .onSuccess { fetched ->
-          val grew = fetched.size > messages.size
-          messages = fetched
-          error = null
-          if (grew && fetched.isNotEmpty()) listState.animateScrollToItem(fetched.lastIndex)
-        }
-        .onFailure { error = it.message }
-      delay(4_000)
+  LaunchedEffect(session.key, lifecycleOwner) {
+    lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+      while (true) {
+        runCatching { repo.client.messages(session.key) }
+          .onSuccess { fetched ->
+            val grew = fetched.size > messages.size
+            messages = fetched
+            error = null
+            if (grew && fetched.isNotEmpty()) listState.animateScrollToItem(fetched.lastIndex)
+          }
+          .onFailure { error = it.message }
+        delay(4_000)
+      }
     }
   }
 

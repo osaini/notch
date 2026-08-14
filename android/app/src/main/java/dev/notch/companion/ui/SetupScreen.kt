@@ -158,7 +158,8 @@ data class PairingUrl(val baseUrl: String, val code: String?)
  */
 fun parsePairingUrl(raw: String): PairingUrl? {
   val trimmed = raw.trim()
-  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return null
+  if (!trimmed.startsWith("http://", ignoreCase = true) &&
+    !trimmed.startsWith("https://", ignoreCase = true)) return null
   val hashIndex = trimmed.indexOf('#')
   val origin = if (hashIndex >= 0) trimmed.substring(0, hashIndex) else trimmed
   val fragment = if (hashIndex >= 0) trimmed.substring(hashIndex + 1) else ""
@@ -169,6 +170,7 @@ fun parsePairingUrl(raw: String): PairingUrl? {
 /** Trims the trailing slash so path joining in NotchClient stays predictable. */
 fun normalizeAddress(raw: String): String {
   var value = raw.trim()
-  if (!value.startsWith("http://") && !value.startsWith("https://")) value = "http://$value"
+  if (!value.startsWith("http://", ignoreCase = true) &&
+    !value.startsWith("https://", ignoreCase = true)) value = "http://$value"
   return value.trimEnd('/')
 }

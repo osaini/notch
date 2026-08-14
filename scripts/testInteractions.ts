@@ -1066,6 +1066,7 @@ async function testConcurrentSettingsUpdates(): Promise<void> {
   try {
     const store = new SettingsStore(dir)
     await store.load()
+    assert.equal(store.canApplyStartupSideEffects(), true)
     const emitted: number[] = []
     store.on('update', (settings) => emitted.push(settings.position.offset))
 
@@ -1106,6 +1107,7 @@ async function testConcurrentSettingsUpdates(): Promise<void> {
     await fsp.writeFile(blockedPath, 'not a directory', 'utf8')
     const recovering = new SettingsStore(blockedPath)
     await recovering.load()
+    assert.equal(recovering.canApplyStartupSideEffects(), false)
     await assert.rejects(recovering.update({ theme: 'light' }))
     assert.equal(recovering.get().theme, 'dark')
     await fsp.rm(blockedPath)
@@ -1114,6 +1116,16 @@ async function testConcurrentSettingsUpdates(): Promise<void> {
   } finally {
     await fsp.rm(dir, { recursive: true, force: true })
   }
+}
+
+async function testClaudeProcessIdentityGuard(): Promise<void> {
+  if (process.platform !== 'win32') return
+  // This test runner is Node, not Claude. A recycled PID owned by any other
+  // executable must never pass the final destructive-action guard.
+  assert.equal(
+    await win32Platform.processes.validateClaudeProcess(process.pid, Date.now()),
+    false
+  )
 }
 
 function listen(server: http.Server, port: number): Promise<void> {
@@ -1457,6 +1469,7 @@ async function main(): Promise<void> {
   await testManagedCodexDispatchLaunch()
   await testManagedCodexProtocol()
   await testConcurrentSettingsUpdates()
+  await testClaudeProcessIdentityGuard()
   await testMobileBridgeSecurityAndLifecycle()
   testPriorityPillLabels()
   console.log('Interaction tests passed.')

@@ -77,11 +77,46 @@ function psLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`
 }
 
+function normalizedWindowsPath(value: string): string {
+  return path.resolve(value).replace(/[\\/]+$/, '').toLowerCase()
+}
+
+/** A same-named shortcut is not necessarily ours; inspect it before mutation. */
+function ownsShortcut(root: string, target: string): boolean {
+  if (!existsSync(target)) return false
+  const script = [
+    `$s = (New-Object -ComObject WScript.Shell).CreateShortcut(${psLiteral(target)})`,
+    '[pscustomobject]@{ TargetPath = $s.TargetPath; Arguments = $s.Arguments; WorkingDirectory = $s.WorkingDirectory } | ConvertTo-Json -Compress'
+  ].join('; ')
+  try {
+    const raw = execFileSync(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+    )
+    const details = JSON.parse(raw) as {
+      TargetPath?: unknown
+      Arguments?: unknown
+      WorkingDirectory?: unknown
+    }
+    return (
+      typeof details.TargetPath === 'string' &&
+      normalizedWindowsPath(details.TargetPath) === normalizedWindowsPath(electronBinary(root)) &&
+      details.Arguments === `"${root}"` &&
+      typeof details.WorkingDirectory === 'string' &&
+      normalizedWindowsPath(details.WorkingDirectory) === normalizedWindowsPath(root)
+    )
+  } catch {
+    return false
+  }
+}
+
 export function getLauncherStatus(): LauncherStatus {
   const root = repoRoot()
+  const target = shortcutPath()
   return {
-    shortcutPath: shortcutPath(),
-    installed: existsSync(shortcutPath()),
+    shortcutPath: target,
+    installed: ownsShortcut(root, target),
     built: existsSync(mainBundle(root))
   }
 }
@@ -97,6 +132,9 @@ export function installLauncher(): LauncherStatus {
   }
 
   const target = shortcutPath()
+  if (existsSync(target) && !ownsShortcut(root, target)) {
+    throw new Error(`Refusing to overwrite a shortcut Notch does not own: ${target}`)
+  }
   // Electron reads its first positional argument as the app directory, and
   // resolves `main` from that package.json — the same entry `npm start` uses.
   const script = [
@@ -119,10 +157,12 @@ export function uninstallLauncher(): LauncherStatus {
   // Validate the caller before touching the one global shortcut. Otherwise a
   // command run from an unrelated directory deletes the working launcher and
   // only then throws while constructing the return status.
-  repoRoot()
+  const root = repoRoot()
   const target = shortcutPath()
-  const existed = existsSync(target)
-  if (existed) rmSync(target)
+  if (existsSync(target) && !ownsShortcut(root, target)) {
+    throw new Error(`Refusing to remove a shortcut Notch does not own: ${target}`)
+  }
+  if (existsSync(target)) rmSync(target)
   return getLauncherStatus()
 }
 

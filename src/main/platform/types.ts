@@ -86,6 +86,12 @@ export interface AgentProcess {
 
 export interface ProcessIntegration {
   /**
+   * Confirms a PID still belongs to Claude and was already alive when its
+   * session record was last written. False is authoritative; null means the
+   * platform could not inspect the process and callers must not terminate it.
+   */
+  validateClaudeProcess(pid: number, recordUpdatedAt: number): Promise<boolean | null>
+  /**
    * Live Codex TUI processes, excluding `app-server` instances.
    *
    * `null` means "could not tell" and is NOT the same as `[]`. SessionWatcher

@@ -1,5 +1,5 @@
 export type AgentKind = 'claude' | 'codex' | 'claude-design'
-export type SessionStatus = 'working' | 'idle' | 'needs-input' | 'reviewing'
+export type SessionStatus = 'working' | 'idle' | 'needs-input' | 'reviewing' | 'unknown'
 
 export interface SessionSummary {
   key: string
@@ -11,6 +11,9 @@ export interface SessionSummary {
   detail: string
   updatedAt: number
   canMessage: boolean
+  /** Correlation hints present only on a synthetic post-dispatch row. */
+  expectedKey?: string
+  excludedKeys?: string[]
 }
 
 export interface ChatMessage {

@@ -12,6 +12,7 @@ import dev.notch.companion.ui.normalizeAddress
 import dev.notch.companion.ui.parsePairingUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,6 +30,8 @@ class CompanionParsingTest {
   fun manualAddressesNormalizeWithoutChangingTheHost() {
     assertEquals("http://192.168.1.20:47822", normalizeAddress(" 192.168.1.20:47822/ "))
     assertEquals("https://notch.example", normalizeAddress("https://notch.example/"))
+    assertEquals("HTTP://192.168.1.20:47822", normalizeAddress("HTTP://192.168.1.20:47822/"))
+    assertNotNull(parsePairingUrl("HTTP://192.168.1.20:47822/#pair=123456"))
   }
 
   @Test

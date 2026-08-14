@@ -56,6 +56,7 @@ function normalize(raw: unknown, current = DEFAULT_SETTINGS): AppSettings {
 export class SettingsStore extends EventEmitter {
   private readonly filePath: string
   private value: AppSettings = DEFAULT_SETTINGS
+  private startupValueAuthoritative = false
   /**
    * Settings can arrive faster than the filesystem can persist them (the
    * position slider is the common case). Keep the merge, write, and event in
@@ -70,12 +71,40 @@ export class SettingsStore extends EventEmitter {
   }
 
   async load(): Promise<AppSettings> {
+    let text: string
     try {
-      this.value = normalize(JSON.parse(await fsp.readFile(this.filePath, 'utf8')))
-    } catch {
+      text = await fsp.readFile(this.filePath, 'utf8')
+    } catch (error) {
       this.value = DEFAULT_SETTINGS
+      // On Windows, reading "file-as-directory/settings.json" can also report
+      // ENOENT. Only a genuinely absent file inside a readable directory is an
+      // authoritative first run.
+      this.startupValueAuthoritative = false
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        try {
+          this.startupValueAuthoritative =
+            (await fsp.stat(path.dirname(this.filePath))).isDirectory()
+        } catch {
+          this.startupValueAuthoritative = false
+        }
+      }
+      return this.value
+    }
+    try {
+      this.value = normalize(JSON.parse(text))
+      this.startupValueAuthoritative = true
+    } catch {
+      // A transient/partial read is not evidence that launch-at-login was
+      // disabled. Show safe defaults, but do not apply them to OS state.
+      this.value = DEFAULT_SETTINGS
+      this.startupValueAuthoritative = false
     }
     return this.value
+  }
+
+  /** Whether startup may safely mirror the loaded value into OS integrations. */
+  canApplyStartupSideEffects(): boolean {
+    return this.startupValueAuthoritative
   }
 
   get(): AppSettings {

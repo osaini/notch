@@ -43,9 +43,26 @@ async function pageTarget() {
 let nextId = 0
 const pending = new Map()
 function command(method, params = {}) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return Promise.reject(new Error(`Browser connection closed before ${method}`))
+  }
   const id = ++nextId
   socket.send(JSON.stringify({ id, method, params }))
-  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }))
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id)
+      reject(new Error(`Browser command timed out: ${method}`))
+    }, 10_000)
+    pending.set(id, { resolve, reject, timer })
+  })
+}
+
+function rejectPending(error) {
+  for (const entry of pending.values()) {
+    clearTimeout(entry.timer)
+    entry.reject(error)
+  }
+  pending.clear()
 }
 
 async function evaluate(expression) {
@@ -101,9 +118,12 @@ try {
     const entry = pending.get(message.id)
     if (!entry) return
     pending.delete(message.id)
+    clearTimeout(entry.timer)
     if (message.error) entry.reject(new Error(message.error.message))
     else entry.resolve(message.result)
   })
+  socket.addEventListener('close', () => rejectPending(new Error('Browser connection closed')))
+  socket.addEventListener('error', () => rejectPending(new Error('Browser connection failed')))
 
   await command('Page.enable')
   await command('Runtime.enable')

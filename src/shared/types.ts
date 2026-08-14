@@ -74,6 +74,9 @@ export interface SessionsSnapshot {
   scannedAt: number
   /** False when any session source could not be read completely this pass. */
   authoritative?: boolean
+  /** Per-source detail for consumers that only depend on one agent. */
+  claudeAuthoritative?: boolean
+  codexAuthoritative?: boolean
   /** Set when the sessions directory could not be read at all. */
   error?: string
   /** Set when Claude Design window detection could not be kept running. */

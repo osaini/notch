@@ -15,7 +15,7 @@ interface Props {
   options: ListboxOption[]
   placeholder: string
   onChange: (value: string) => void
-  onBrowse?: () => void
+  onBrowse?: () => void | Promise<void>
   browsing?: boolean
 }
 
@@ -135,7 +135,9 @@ export function Listbox({
               className="listbox-browse"
               onClick={() => {
                 close(false)
-                onBrowse()
+                void Promise.resolve()
+                  .then(onBrowse)
+                  .finally(() => triggerRef.current?.focus())
               }}
             >
               <span>+</span>{browsing ? 'Opening…' : 'Browse for a folder…'}

@@ -694,6 +694,21 @@ export class SessionWatcher extends EventEmitter {
       }
     }
 
+    const identity = await platform.processes.validateClaudeProcess(
+      session.pid,
+      session.updatedAt
+    )
+    if (identity !== true) {
+      void this.scan()
+      return {
+        ok: false,
+        message:
+          identity === false
+            ? 'That PID no longer belongs to this Claude session. The stale row will be refreshed.'
+            : 'The operating system could not verify this Claude process, so Notch left it running.'
+      }
+    }
+
     try {
       process.kill(session.pid)
     } catch (err) {
@@ -826,6 +841,22 @@ export class SessionWatcher extends EventEmitter {
       error = (err as Error).message
     }
 
+    if (!claudeScanAuthoritative) {
+      const present = new Set(sessions.map((session) => session.key))
+      for (const previous of this.snapshot.sessions) {
+        if (
+          previous.agent === 'claude' &&
+          previous.pid &&
+          isPidAlive(previous.pid) &&
+          !present.has(previous.key) &&
+          !this.suppressed.has(previous.key)
+        ) {
+          sessions.push({ ...previous })
+          present.add(previous.key)
+        }
+      }
+    }
+
     // A failed directory/file read is not evidence that a process disappeared.
     // Preserve hook-derived state until a complete sweep can authoritatively
     // prove which Claude sessions are still live.
@@ -931,7 +962,12 @@ export class SessionWatcher extends EventEmitter {
       const active = session.status === 'busy' || session.status === 'needs-input'
       // A matched TUI remains a live session even after its current task goes
       // idle; it disappears as soon as the underlying process exits.
-      if (tuiProcess || active || Date.now() - session.updatedAt <= CODEX_RECENT_MS) {
+      if (
+        tuiProcess ||
+        (isTui && tuiMatches === null) ||
+        active ||
+        Date.now() - session.updatedAt <= CODEX_RECENT_MS
+      ) {
         sessions.push(session)
       }
     }
@@ -977,6 +1013,8 @@ export class SessionWatcher extends EventEmitter {
       parkedCount: sessions.length - visible.length,
       scannedAt: Date.now(),
       authoritative: claudeScanAuthoritative && codexScanAuthoritative,
+      claudeAuthoritative: claudeScanAuthoritative,
+      codexAuthoritative: codexScanAuthoritative,
       error,
       designError: this.design.getError()
     })
@@ -992,6 +1030,8 @@ export class SessionWatcher extends EventEmitter {
       parkedCount: snapshot.parkedCount,
       scannedAt: snapshot.scannedAt,
       authoritative: snapshot.authoritative,
+      claudeAuthoritative: snapshot.claudeAuthoritative,
+      codexAuthoritative: snapshot.codexAuthoritative,
       error: snapshot.error,
       designError: snapshot.designError
     })

@@ -120,7 +120,7 @@ function probePreferredAddress(): Promise<string | null> {
   })
 }
 
-type MobileStatus = 'working' | 'idle' | 'needs-input' | 'reviewing'
+type MobileStatus = 'working' | 'idle' | 'needs-input' | 'reviewing' | 'unknown'
 
 interface MobileSessionSummary {
   key: string
@@ -132,6 +132,8 @@ interface MobileSessionSummary {
   detail: string
   updatedAt: number
   canMessage: boolean
+  expectedKey?: string
+  excludedKeys?: string[]
 }
 
 interface MobileMessage {
@@ -229,7 +231,8 @@ function mobileStatus(session: SessionState, running: boolean): MobileStatus {
   if (session.needsInput || session.status === 'needs-input') return 'needs-input'
   if (session.status === 'reviewing') return 'reviewing'
   if (session.status === 'busy') return 'working'
-  return 'idle'
+  if (session.status === 'idle') return 'idle'
+  return 'unknown'
 }
 
 function statusDetail(session: SessionState, status: MobileStatus): string {
@@ -239,6 +242,7 @@ function statusDetail(session: SessionState, status: MobileStatus): string {
   if (status === 'working') return `${AGENT_NAMES[session.agent]} is working`
   if (status === 'reviewing') return 'Review gate in progress'
   if (status === 'idle') return 'Ready for a follow-up'
+  if (status === 'unknown') return 'Agent status is temporarily unavailable'
   return 'Waiting for you'
 }
 
@@ -935,7 +939,9 @@ export class MobileBridge extends EventEmitter {
         status: 'working',
         detail: 'Started in Windows Terminal; waiting for its session record',
         updatedAt: dispatchedAt,
-        canMessage: false
+        canMessage: false,
+        ...(result.sessionId ? { expectedKey: `${agent}:${result.sessionId}` } : {}),
+        excludedKeys: [...before]
       }
     })
   }

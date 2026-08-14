@@ -77,4 +77,53 @@ $ErrorActionPreference = 'Stop'
   })
 }
 
-export const processes: ProcessIntegration = { listCodexTuiProcesses }
+async function validateClaudeProcess(
+  pid: number,
+  recordUpdatedAt: number
+): Promise<boolean | null> {
+  if (!Number.isInteger(pid) || pid <= 0 || !Number.isFinite(recordUpdatedAt) || recordUpdatedAt <= 0) {
+    return false
+  }
+  const script = `
+$ErrorActionPreference = 'Stop'
+$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"
+if ($null -eq $p) { exit 3 }
+[pscustomobject]@{
+  name = [string]$p.Name
+  commandLine = [string]$p.CommandLine
+  startedAt = ([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds()
+} | ConvertTo-Json -Compress
+`
+  return new Promise((resolve) => {
+    const child = spawn('powershell.exe', powerShellArgs(script), {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+    const stdout: Buffer[] = []
+    const timer = setTimeout(() => child.kill(), 2500)
+    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
+    child.once('error', () => {
+      clearTimeout(timer)
+      resolve(null)
+    })
+    child.once('close', (code) => {
+      clearTimeout(timer)
+      if (code === 3) return resolve(false)
+      if (code !== 0) return resolve(null)
+      try {
+        const row = recordObject(JSON.parse(Buffer.concat(stdout).toString('utf8')))
+        const identity = `${str(row?.name)} ${str(row?.commandLine)}`
+        const startedAt = num(row?.startedAt)
+        const isClaude = /(?:^|[\\/\s"'])claude(?:-code)?(?:\.exe|\.cmd|\.js)?(?:[\\/"'\s]|$)/i.test(identity)
+        resolve(isClaude && startedAt > 0 && startedAt <= recordUpdatedAt + 60_000)
+      } catch {
+        resolve(null)
+      }
+    })
+  })
+}
+
+export const processes: ProcessIntegration = {
+  listCodexTuiProcesses,
+  validateClaudeProcess
+}

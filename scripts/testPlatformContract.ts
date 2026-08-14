@@ -67,6 +67,7 @@ for (const p of platforms) {
       assert.ok(p[key], `missing ${key}`)
     }
     assert.equal(typeof p.focus.focusSessionWindow, 'function')
+    assert.equal(typeof p.processes.validateClaudeProcess, 'function')
     assert.equal(typeof p.processes.listCodexTuiProcesses, 'function')
     assert.equal(typeof p.terminal.agentPlans, 'function')
     assert.equal(typeof p.terminal.pairPlans, 'function')

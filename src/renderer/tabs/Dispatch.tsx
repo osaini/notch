@@ -128,9 +128,16 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
     void window.notch.getAgentVersions().then(setVersions)
     // Empty means the managed app server is not up to be asked, which is not an
     // error — the static fallback already seeded the list.
-    void window.notch.getCodexModels().then((models) => {
-      if (models.length) setCodexModels(models)
+    const refreshCodexModels = (): void => {
+      void window.notch.getCodexModels().then((models) => {
+        if (models.length) setCodexModels(models)
+      })
+    }
+    refreshCodexModels()
+    const unsubscribe = window.notch.onManagedCodexState((state) => {
+      if (state.status === 'ready') refreshCodexModels()
     })
+    return unsubscribe
   }, [])
 
   const projectOptions = useMemo(() => projects.map((directory, index) => ({
@@ -265,7 +272,7 @@ export function Dispatch({ attachments, usage, onClearAttachments }: Props): Rea
           options={projectOptions}
           placeholder="No recent projects"
           onChange={(value) => { setCwd(value); setResult(null) }}
-          onBrowse={() => void browse()}
+          onBrowse={browse}
           browsing={browsing}
         />
       </div>

@@ -45,6 +45,10 @@ class NotchClient(private val store: NotchStore) {
 
   private val http = OkHttpClient.Builder()
     .cookieJar(NotchCookieJar(store))
+    // The desktop bridge has no redirect contract. Following one would bypass
+    // the base-URL policy below and could re-scope the pairing cookie.
+    .followRedirects(false)
+    .followSslRedirects(false)
     .connectTimeout(6, TimeUnit.SECONDS)
     .writeTimeout(15, TimeUnit.SECONDS)
     // The SSE stream is deliberately never idle for longer than the bridge's

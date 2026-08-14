@@ -19,7 +19,8 @@ const statusCopy: Record<SessionStatus, string> = {
   working: 'Working',
   idle: 'Done',
   'needs-input': 'Needs you',
-  reviewing: 'Reviewing'
+  reviewing: 'Reviewing',
+  unknown: 'Unknown'
 }
 
 const AGENT_GLYPHS: Record<AgentKind, string> = {
@@ -37,6 +38,11 @@ function timeAgo(timestamp: number): string {
   if (minutes < 1) return 'now'
   if (minutes < 60) return `${minutes}m`
   return `${Math.round(minutes / 60)}h`
+}
+
+function projectPathKey(value: string): string {
+  const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '')
+  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized
 }
 
 function SessionCard({
@@ -82,14 +88,24 @@ function Conversation({
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   const [loadingMessages, setLoadingMessages] = useState(true)
+  const pending = session.key.startsWith('pending:')
 
   useEffect(() => {
     let cancelled = false
+    setSendError('')
+    if (session.key.startsWith('pending:')) {
+      setMessages([])
+      setLoadingMessages(false)
+      return () => { cancelled = true }
+    }
     setLoadingMessages(true)
     void bridge
       .getMessages(session.key)
       .then((next) => {
-        if (!cancelled) setMessages(next)
+        if (!cancelled) {
+          setMessages(next)
+          setSendError('')
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -102,7 +118,7 @@ function Conversation({
     return () => { cancelled = true }
   }, [bridge, session.key, session.status, session.updatedAt])
 
-  const canSend = session.canMessage && session.status === 'idle'
+  const canSend = !pending && session.canMessage && session.status === 'idle'
 
   const send = async (): Promise<void> => {
     const value = text.trim()
@@ -151,9 +167,13 @@ function Conversation({
         ))}
         {loadingMessages && <div className="read-only-note">Loading recent messages…</div>}
         {!loadingMessages && messages.length === 0 && (
-          <div className="read-only-note">No recent transcript messages are available.</div>
+          <div className="read-only-note">
+            {pending
+              ? 'The task started; waiting for its session record…'
+              : 'No recent transcript messages are available.'}
+          </div>
         )}
-        {!session.canMessage && (
+        {!pending && !session.canMessage && (
           <div className="read-only-note">
             This terminal wasn’t started by Notch, so it’s available read-only.
           </div>
@@ -170,7 +190,9 @@ function Conversation({
         <textarea
           aria-label="Message agent"
           placeholder={
-            !session.canMessage
+            pending
+              ? 'Waiting for session record'
+              : !session.canMessage
               ? 'Read-only session'
               : session.status !== 'idle'
                 ? 'Wait until the agent is done'
@@ -570,13 +592,19 @@ export function App({ bridge }: AppProps): React.JSX.Element {
   useEffect(() => {
     if (!selected || !snapshot) return
     if (selected.key.startsWith('pending:')) {
+      const selectedPath = projectPathKey(selected.path)
       const discovered = snapshot.sessions
         .filter((session) =>
           session.agent === selected.agent &&
           session.project === selected.project &&
+          projectPathKey(session.path) === selectedPath &&
+          !selected.excludedKeys?.includes(session.key) &&
           session.updatedAt >= selected.updatedAt
         )
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+        .sort((left, right) =>
+          Number(right.key === selected.expectedKey) - Number(left.key === selected.expectedKey) ||
+          right.updatedAt - left.updatedAt
+        )[0]
       if (discovered) setSelected(discovered)
       return
     }

@@ -66,7 +66,7 @@ export function buildClaudeArgs(req: DispatchRequest): string[] {
   if (req.claude?.model) args.push('--model', req.claude.model)
   if (req.claude?.effort) args.push('--effort', req.claude.effort)
   const prompt = composePrompt(req)
-  if (prompt) args.push(prompt)
+  if (prompt) args.push('--', prompt)
   return args
 }
 
@@ -100,7 +100,7 @@ export function buildCodexArgs(
   // the parser's raw-literal fallback.
   if (req.codex?.effort) args.push('-c', `model_reasoning_effort="${req.codex.effort}"`)
   const prompt = composePrompt(req)
-  if (prompt) args.push(prompt)
+  if (prompt) args.push('--', prompt)
   return args
 }
 
