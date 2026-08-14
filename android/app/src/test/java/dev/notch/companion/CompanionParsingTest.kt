@@ -7,6 +7,7 @@ import dev.notch.companion.data.SessionStatus
 import dev.notch.companion.data.SessionSummary
 import dev.notch.companion.data.Snapshot
 import dev.notch.companion.service.waitingSessions
+import dev.notch.companion.service.shouldStartWatcherAfterBoot
 import dev.notch.companion.ui.normalizeAddress
 import dev.notch.companion.ui.parsePairingUrl
 import org.junit.Assert.assertEquals
@@ -64,5 +65,14 @@ class CompanionParsingTest {
     assertEquals(listOf(waiting), waitingSessions(snapshot, Connection.ONLINE))
     assertTrue(waitingSessions(snapshot, Connection.CONNECTING).isEmpty())
     assertTrue(waitingSessions(snapshot, Connection.OFFLINE).isEmpty())
+  }
+
+  @Test
+  fun bootRestoresOnlyAnAuthorizedConfiguredWatcher() {
+    assertTrue(shouldStartWatcherAfterBoot(true, true, true, true))
+    assertFalse(shouldStartWatcherAfterBoot(false, true, true, true))
+    assertFalse(shouldStartWatcherAfterBoot(true, false, true, true))
+    assertFalse(shouldStartWatcherAfterBoot(true, true, false, true))
+    assertFalse(shouldStartWatcherAfterBoot(true, true, true, false))
   }
 }

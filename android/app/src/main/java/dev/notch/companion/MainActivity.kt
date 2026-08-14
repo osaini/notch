@@ -6,21 +6,26 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.notch.companion.data.NotchRepository
-import dev.notch.companion.data.SessionSummary
 import dev.notch.companion.service.NotchService
 import dev.notch.companion.ui.*
 
@@ -30,8 +35,29 @@ private sealed interface Screen {
   data object Sessions : Screen
   data object Dispatch : Screen
   data object Settings : Screen
-  data class Detail(val session: SessionSummary) : Screen
+  data class Detail(val sessionKey: String) : Screen
 }
+
+private val ScreenSaver = listSaver<Screen, String>(
+  save = { screen ->
+    when (screen) {
+      Screen.Setup -> listOf("setup")
+      Screen.Sessions -> listOf("sessions")
+      Screen.Dispatch -> listOf("dispatch")
+      Screen.Settings -> listOf("settings")
+      is Screen.Detail -> listOf("detail", screen.sessionKey)
+    }
+  },
+  restore = { saved ->
+    when (saved.firstOrNull()) {
+      "setup" -> Screen.Setup
+      "dispatch" -> Screen.Dispatch
+      "settings" -> Screen.Settings
+      "detail" -> saved.getOrNull(1)?.let(Screen::Detail) ?: Screen.Sessions
+      else -> Screen.Sessions
+    }
+  }
+)
 
 class MainActivity : ComponentActivity() {
 
@@ -75,7 +101,7 @@ private fun App(repo: NotchRepository) {
   val connection by repo.connection.collectAsStateWithLifecycle()
   val error by repo.error.collectAsStateWithLifecycle()
 
-  var screen by remember {
+  var screen by rememberSaveable(stateSaver = ScreenSaver) {
     mutableStateOf<Screen>(if (repo.isPaired()) Screen.Sessions else Screen.Setup)
   }
   var watching by remember {
@@ -151,6 +177,10 @@ private fun App(repo: NotchRepository) {
     if (connection == dev.notch.companion.data.Connection.UNPAIRED) screen = Screen.Setup
   }
 
+  BackHandler(enabled = screen != Screen.Setup && screen != Screen.Sessions) {
+    screen = Screen.Sessions
+  }
+
   when (val current = screen) {
     Screen.Setup -> SetupScreen(
       repo = repo,
@@ -164,7 +194,7 @@ private fun App(repo: NotchRepository) {
       snapshot = snapshot,
       connection = connection,
       error = error,
-      onOpen = { screen = Screen.Detail(it) },
+      onOpen = { screen = Screen.Detail(it.key) },
       onDispatch = { screen = Screen.Dispatch },
       onSettings = { screen = Screen.Settings }
     )
@@ -191,17 +221,21 @@ private fun App(repo: NotchRepository) {
     is Screen.Detail -> {
       // Re-read the session from the live snapshot so its status keeps updating
       // while the transcript is open.
-      val live = snapshot?.sessions?.firstOrNull { it.key == current.session.key }
-      LaunchedEffect(snapshot, current.session.key) {
+      val live = snapshot?.sessions?.firstOrNull { it.key == current.sessionKey }
+      LaunchedEffect(snapshot, current.sessionKey) {
         if (snapshot != null && live == null) screen = Screen.Sessions
       }
-      SessionScreen(
-        repo = repo,
-        // Keep the title stable during the initial reconnect only. Once an
-        // authoritative snapshot omits the session, the effect above closes it.
-        session = live ?: current.session,
-        onBack = { screen = Screen.Sessions }
-      )
+      if (live != null) {
+        SessionScreen(
+          repo = repo,
+          session = live,
+          onBack = { screen = Screen.Sessions }
+        )
+      } else if (snapshot == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+          CircularProgressIndicator()
+        }
+      }
     }
   }
 }

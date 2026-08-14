@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.notch.companion.data.NotchRepository
@@ -21,11 +22,15 @@ fun DispatchScreen(
   onDispatched: () -> Unit
 ) {
   val scope = rememberCoroutineScope()
-  var agent by remember { mutableStateOf("claude") }
-  var project by remember { mutableStateOf(projects.firstOrNull()) }
-  var prompt by remember { mutableStateOf("") }
+  var agent by rememberSaveable { mutableStateOf("claude") }
+  var projectPath by rememberSaveable { mutableStateOf(projects.firstOrNull()?.path.orEmpty()) }
+  val project = projects.firstOrNull { it.path == projectPath } ?: projects.firstOrNull()
+  LaunchedEffect(project?.path) {
+    if (project != null && projectPath != project.path) projectPath = project.path
+  }
+  var prompt by rememberSaveable { mutableStateOf("") }
   var busy by remember { mutableStateOf(false) }
-  var error by remember { mutableStateOf<String?>(null) }
+  var error by rememberSaveable { mutableStateOf<String?>(null) }
   var expanded by remember { mutableStateOf(false) }
 
   Scaffold(
@@ -72,7 +77,7 @@ fun DispatchScreen(
           projects.forEach { option ->
             DropdownMenuItem(
               text = { Column { Text(option.name); Text(option.path, style = MaterialTheme.typography.bodySmall) } },
-              onClick = { project = option; expanded = false }
+              onClick = { projectPath = option.path; expanded = false }
             )
           }
         }

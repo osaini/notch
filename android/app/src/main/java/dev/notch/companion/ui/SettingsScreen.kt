@@ -5,6 +5,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.notch.companion.data.Connection
@@ -23,7 +24,7 @@ fun SettingsScreen(
 ) {
   val scope = rememberCoroutineScope()
   var busy by remember { mutableStateOf(false) }
-  var forgetError by remember { mutableStateOf<String?>(null) }
+  var forgetError by rememberSaveable { mutableStateOf<String?>(null) }
 
   Scaffold(
     topBar = {

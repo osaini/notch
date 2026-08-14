@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,7 +30,7 @@ fun SessionScreen(
 ) {
   val scope = rememberCoroutineScope()
   var messages by remember { mutableStateOf<List<Message>>(emptyList()) }
-  var draft by remember { mutableStateOf("") }
+  var draft by rememberSaveable(session.key) { mutableStateOf("") }
   var sending by remember { mutableStateOf(false) }
   var error by remember { mutableStateOf<String?>(null) }
   val listState = rememberLazyListState()

@@ -6,6 +6,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -27,12 +28,12 @@ fun SetupScreen(
   onPaired: () -> Unit
 ) {
   val scope = rememberCoroutineScope()
-  var address by remember { mutableStateOf(repo.store.baseUrl.orEmpty()) }
-  var code by remember { mutableStateOf("") }
-  var deviceName by remember { mutableStateOf(repo.store.deviceName) }
+  var address by rememberSaveable { mutableStateOf(repo.store.baseUrl.orEmpty()) }
+  var code by rememberSaveable { mutableStateOf("") }
+  var deviceName by rememberSaveable { mutableStateOf(repo.store.deviceName) }
   var busy by remember { mutableStateOf(false) }
-  var error by remember { mutableStateOf<String?>(null) }
-  var probed by remember { mutableStateOf<String?>(null) }
+  var error by rememberSaveable { mutableStateOf<String?>(null) }
+  var probed by rememberSaveable { mutableStateOf<String?>(null) }
 
   val scanner = rememberQrScanner { result ->
     error = null
