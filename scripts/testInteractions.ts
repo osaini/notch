@@ -21,6 +21,7 @@ import {
   isInactiveClaudeBackground,
   matchCodexTuiProcesses,
   parseCodexRollout,
+  snapshotChangeKey,
   type SessionWatcher
 } from '../src/main/sessionWatcher'
 import { lastAssistantText, trailingQuestion } from '../src/main/transcriptTail'
@@ -1454,6 +1455,31 @@ function testPriorityPillLabels(): void {
   }
 }
 
+function testSnapshotChangeDetection(): void {
+  const snapshot: SessionsSnapshot = {
+    sessions: [],
+    color: 'grey',
+    counts: { total: 0, idle: 0, busy: 0, needsInput: 0, reviewing: 0, unknown: 0 },
+    prunedCount: 0,
+    parkedCount: 0,
+    scannedAt: 100,
+    authoritative: true,
+    claudeAuthoritative: true,
+    codexAuthoritative: true
+  }
+
+  assert.equal(
+    snapshotChangeKey(snapshot),
+    snapshotChangeKey({ ...snapshot, scannedAt: 200 }),
+    'a timestamp-only safety poll must not fan out a redundant update'
+  )
+  assert.notEqual(
+    snapshotChangeKey(snapshot),
+    snapshotChangeKey({ ...snapshot, error: 'scan failed' }),
+    'consumer-visible scan state must still trigger an update'
+  )
+}
+
 async function main(): Promise<void> {
   await testClaudeNormalizationAndRoundTrip()
   await testHookAuthorization()
@@ -1472,6 +1498,7 @@ async function main(): Promise<void> {
   await testClaudeProcessIdentityGuard()
   await testMobileBridgeSecurityAndLifecycle()
   testPriorityPillLabels()
+  testSnapshotChangeDetection()
   console.log('Interaction tests passed.')
 }
 

@@ -590,6 +590,26 @@ export function aggregateColor(sessions: SessionState[]): NotchColor {
   return 'green'
 }
 
+/**
+ * Stable content used to decide whether consumers need a new snapshot.
+ * `scannedAt` is deliberately excluded: it advances on every safety poll even
+ * when nothing visible or actionable changed.
+ */
+export function snapshotChangeKey(snapshot: SessionsSnapshot): string {
+  return JSON.stringify({
+    sessions: snapshot.sessions,
+    color: snapshot.color,
+    counts: snapshot.counts,
+    prunedCount: snapshot.prunedCount,
+    parkedCount: snapshot.parkedCount,
+    authoritative: snapshot.authoritative,
+    claudeAuthoritative: snapshot.claudeAuthoritative,
+    codexAuthoritative: snapshot.codexAuthoritative,
+    error: snapshot.error,
+    designError: snapshot.designError
+  })
+}
+
 export class SessionWatcher extends EventEmitter {
   private watchers: fs.FSWatcher[] = []
   private pollTimer: NodeJS.Timeout | null = null
@@ -1022,19 +1042,7 @@ export class SessionWatcher extends EventEmitter {
 
   private publish(snapshot: SessionsSnapshot): void {
     this.snapshot = snapshot
-    const serialized = JSON.stringify({
-      sessions: snapshot.sessions,
-      color: snapshot.color,
-      counts: snapshot.counts,
-      prunedCount: snapshot.prunedCount,
-      parkedCount: snapshot.parkedCount,
-      scannedAt: snapshot.scannedAt,
-      authoritative: snapshot.authoritative,
-      claudeAuthoritative: snapshot.claudeAuthoritative,
-      codexAuthoritative: snapshot.codexAuthoritative,
-      error: snapshot.error,
-      designError: snapshot.designError
-    })
+    const serialized = snapshotChangeKey(snapshot)
     if (serialized === this.lastSerialized) return
     this.lastSerialized = serialized
     this.emit('update', snapshot)
