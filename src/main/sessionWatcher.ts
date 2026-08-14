@@ -25,6 +25,21 @@ const POLL_MS = 2000
 const DEBOUNCE_MS = 120
 /** Completed Codex threads remain visible briefly; active threads stay indefinitely. */
 const CODEX_RECENT_MS = 30 * 60 * 1000
+/**
+ * How long a rollout may claim a running turn while sitting untouched on disk.
+ *
+ * Codex streams `token_count` events throughout a turn, so a genuinely running
+ * one rewrites its rollout continuously. An hour of silence means the process
+ * went away without ever recording `task_complete`.
+ */
+const CODEX_STALE_BUSY_MS = 60 * 60 * 1000
+/**
+ * Grace between a dispatched thread's rollout appearing and its terminal's
+ * process existing. `ManagedCodexService.dispatch` waits for the rollout to be
+ * readable *before* it launches the terminal, so a sweep in that gap would
+ * otherwise prune the row the user just created.
+ */
+const CODEX_LAUNCH_GRACE_MS = 60 * 1000
 
 interface RawSession {
   pid?: unknown
@@ -100,9 +115,29 @@ function listCodexTuiProcesses(): Promise<CodexTuiProcess[] | null> {
 }
 
 /**
- * Associates live TUI processes with their rollouts. Managed resumes include
+ * Codex rows whose lifetime a `codex` process can vouch for.
+ *
+ * `codex-tui` is a directly-launched CLI. `notch` is one we launched ourselves:
+ * `ManagedCodexService.dispatch` opens a terminal running
+ * `codex --remote <endpoint> resume <threadId>`, which is the same CLI. Codex
+ * Desktop and every other originator live inside their own host process, so the
+ * absence of a `codex` process says nothing about them and must never prune one.
+ */
+export function isProcessBackedCodex(session: SessionState): boolean {
+  const kind = session.kind.toLowerCase()
+  return kind === 'codex-tui' || kind === 'notch'
+}
+
+/**
+ * Associates live CLI processes with their rollouts. Managed resumes include
  * the UUID in argv and match exactly. A directly-launched `codex` process does
  * not, so its creation time is paired with the nearest session_meta record.
+ *
+ * Only `codex-tui` rows reach that second pass. A `notch` row is always resumed
+ * with its UUID on the command line, so proximity matching could not tell it
+ * anything the exact pass missed — it could only mispair the row with an
+ * unrelated CLI that happened to start alongside it, and keep a dead thread
+ * looking alive.
  */
 export function matchCodexTuiProcesses(
   sessions: SessionState[],
@@ -110,7 +145,7 @@ export function matchCodexTuiProcesses(
 ): Map<string, CodexTuiProcess> {
   const matches = new Map<string, CodexTuiProcess>()
   const remainingSessions = sessions.filter(
-    (session) => session.agent === 'codex' && session.kind.toLowerCase() === 'codex-tui'
+    (session) => session.agent === 'codex' && isProcessBackedCodex(session)
   )
   const remainingProcesses = [...processes]
 
@@ -126,15 +161,18 @@ export function matchCodexTuiProcesses(
   }
 
   const MAX_START_DELTA_MS = 60_000
-  remainingSessions.sort((left, right) => left.startedAt - right.startedAt)
+  const directSessions = remainingSessions.filter(
+    (session) => session.kind.toLowerCase() === 'codex-tui'
+  )
+  directSessions.sort((left, right) => left.startedAt - right.startedAt)
   remainingProcesses.sort((left, right) => left.startedAt - right.startedAt)
   let sessionIndex = 0
   let processIndex = 0
   // For points on one timeline with a fixed validity window, pairing the
   // earliest mutually compatible entries maximizes cardinality. A global
   // nearest-pair greedy can consume the middle process and strand both ends.
-  while (sessionIndex < remainingSessions.length && processIndex < remainingProcesses.length) {
-    const session = remainingSessions[sessionIndex]
+  while (sessionIndex < directSessions.length && processIndex < remainingProcesses.length) {
+    const session = directSessions[sessionIndex]
     const process = remainingProcesses[processIndex]
     if (process.startedAt < session.startedAt - MAX_START_DELTA_MS) {
       processIndex++
@@ -553,6 +591,22 @@ export function resolveParkedParents(
   return output
 }
 
+/**
+ * Reports whether a Codex row's claim to be mid-turn has gone stale.
+ *
+ * A rollout is the only evidence there is for a thread hosted by another app,
+ * and it ends wherever the process died — a crash or a closed window leaves a
+ * `task_started` with no matching `task_complete`, which reads as "busy"
+ * forever. Silence is what gives that away: a running turn rewrites its rollout
+ * continuously.
+ *
+ * `needs-input` is deliberately not covered. A thread parked on a question is
+ * silent by design, and may legitimately wait as long as the person does.
+ */
+export function isStaleBusyCodex(session: SessionState, now: number): boolean {
+  return session.status === 'busy' && now - session.updatedAt > CODEX_STALE_BUSY_MS
+}
+
 /** A completed daemon-backed background job has no window and no live work. */
 export function isInactiveClaudeBackground(session: SessionState): boolean {
   return (
@@ -966,11 +1020,24 @@ export class SessionWatcher extends EventEmitter {
     for (const row of codexRows) {
       const { session } = row
       if (this.suppressed.has(session.key)) continue
-      const isTui = session.kind.toLowerCase() === 'codex-tui'
+      const processBacked = isProcessBackedCodex(session)
       const tuiProcess = tuiMatches?.get(session.key)
-      // A successful process sweep is authoritative for TUI lifetime. `/exit`,
+      // A successful process sweep is authoritative for CLI lifetime. `/exit`,
       // a closed tab, or a crash can leave the rollout permanently "busy".
-      if (isTui && tuiMatches !== null && !tuiProcess) continue
+      if (
+        processBacked &&
+        tuiMatches !== null &&
+        !tuiProcess &&
+        Date.now() - session.startedAt > CODEX_LAUNCH_GRACE_MS
+      ) {
+        continue
+      }
+      // Downgrading rather than dropping the row lets `CODEX_RECENT_MS` age it
+      // out on the same terms as any other finished thread.
+      if (isStaleBusyCodex(session, Date.now())) {
+        // `rawStatus` is left alone so the stale file value stays visible.
+        session.status = 'idle'
+      }
       if (tuiProcess) {
         session.pid = tuiProcess.pid
       }
@@ -984,7 +1051,7 @@ export class SessionWatcher extends EventEmitter {
       // idle; it disappears as soon as the underlying process exits.
       if (
         tuiProcess ||
-        (isTui && tuiMatches === null) ||
+        (processBacked && tuiMatches === null) ||
         active ||
         Date.now() - session.updatedAt <= CODEX_RECENT_MS
       ) {

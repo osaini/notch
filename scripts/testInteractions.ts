@@ -19,6 +19,7 @@ import {
 import {
   resolveParkedParents,
   isInactiveClaudeBackground,
+  isStaleBusyCodex,
   matchCodexTuiProcesses,
   parseCodexRollout,
   snapshotChangeKey,
@@ -738,6 +739,26 @@ function testCodexTuiProcessMatching(): void {
   assert.equal(matches.has(stale.key), false)
   assert.equal(matches.has(desktop.key), false)
 
+  // A Notch-dispatched thread is resumed by the same CLI, so its own process
+  // must be found — but only by UUID. Proximity matching is not applied to it,
+  // so an unrelated CLI starting alongside it cannot make a dead thread look
+  // alive, which is what kept abandoned dispatches on the pill forever.
+  const dispatched = { ...session('thread-notch', 30_000), kind: 'notch' }
+  const abandoned = { ...session('thread-gone', 30_000), kind: 'notch' }
+  const notchMatches = matchCodexTuiProcesses(
+    [dispatched, abandoned],
+    [
+      {
+        pid: 505,
+        startedAt: 31_000,
+        commandLine: 'codex --remote ws://127.0.0.1:4567 resume thread-notch'
+      },
+      { pid: 606, startedAt: 30_100, commandLine: 'codex' }
+    ]
+  )
+  assert.equal(notchMatches.get(dispatched.key)?.pid, 505)
+  assert.equal(notchMatches.has(abandoned.key), false)
+
   const earlier = session('thread-earlier', 0)
   const later = session('thread-later', 50_000)
   const cardinalityMatches = matchCodexTuiProcesses(
@@ -749,6 +770,34 @@ function testCodexTuiProcessMatching(): void {
   )
   assert.equal(cardinalityMatches.get(earlier.key)?.pid, 303)
   assert.equal(cardinalityMatches.get(later.key)?.pid, 404)
+}
+
+function testStaleBusyCodex(): void {
+  const now = Date.parse('2026-08-14T12:00:00Z')
+  const hours = (count: number): number => now - count * 60 * 60 * 1000
+  const row = (status: SessionState['status'], updatedAt: number): SessionState => ({
+    key: 'codex:thread',
+    agent: 'codex',
+    sessionId: 'thread',
+    cwd: 'C:\\repo',
+    name: 'thread',
+    kind: 'Codex Desktop',
+    status,
+    startedAt: hours(300),
+    updatedAt,
+    needsInput: status === 'needs-input',
+    canTerminate: false,
+    canFocus: true
+  })
+
+  // A turn writes continuously, so recent silence is still a live turn.
+  assert.equal(isStaleBusyCodex(row('busy', hours(0.5)), now), false)
+  // The abandoned `task_started` that kept dead threads on the pill forever.
+  assert.equal(isStaleBusyCodex(row('busy', hours(300)), now), true)
+  // A person may take as long as they like to answer, so silence proves nothing.
+  assert.equal(isStaleBusyCodex(row('needs-input', hours(300)), now), false)
+  // An already-finished thread is aged out by recency, not downgraded again.
+  assert.equal(isStaleBusyCodex(row('idle', hours(300)), now), false)
 }
 
 async function testManagedCodexDispatchLaunch(): Promise<void> {
@@ -1510,6 +1559,7 @@ async function main(): Promise<void> {
   testTranscriptTail()
   testCodexRolloutParser()
   testCodexTuiProcessMatching()
+  testStaleBusyCodex()
   await testManagedCodexDispatchLaunch()
   await testManagedCodexProtocol()
   await testConcurrentSettingsUpdates()
