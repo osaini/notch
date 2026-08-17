@@ -37,13 +37,26 @@ export interface FocusIntegration {
   focusSessionWindow(session: SessionState): Promise<SessionActionResult>
 }
 
-/* ── foreign window presence (Claude Design) ────────────────────────────── */
+/* ── foreign window presence (Claude Desktop) ───────────────────────────── */
 
 export interface DesignWindow {
   /** Opaque per-platform window identity. Decimal HWND on Windows. */
   handle: string
   pid: number
   title: string
+}
+
+/**
+ * One sweep's view of Claude Desktop.
+ *
+ * Design windows are the presence signal for Claude Design. `main` is Claude
+ * Desktop's ordinary window — the one Cowork lives inside — and exists only so
+ * a Cowork row has something to focus; Cowork is a surface within that window,
+ * not a window of its own, so this can never target an individual Cowork chat.
+ */
+export interface ClaudeWindows {
+  design: DesignWindow[]
+  main: DesignWindow | null
 }
 
 export interface DesignWindowProbe {
@@ -65,6 +78,11 @@ export interface DesignWindowProbe {
   /**
    * A long-lived helper that prints one `{"windows":[…]}` JSON line per sweep.
    * Re-spawning per sweep would cost more than everything else the notch does.
+   *
+   * Each entry is `{handle, pid, title, design}` and covers EVERY visible
+   * top-level Claude Desktop window, not only the design ones. `design` is set
+   * from the `titles` allowlist passed in, so which captions count stays a
+   * decision of the app layer; the sweep only reports what is on screen.
    */
   sweepCommand(
     titles: readonly string[],
@@ -220,12 +238,29 @@ export interface PathIntegration {
   isRevealable(target: string): boolean
 }
 
+/* ── cowork roots ───────────────────────────────────────────────────────── */
+
+export interface CoworkRootProbe {
+  /**
+   * Directories that may hold Claude Desktop's `local-agent-mode-sessions` tree,
+   * best first. Locating it is pure OS trivia — on Windows the Store build's
+   * `%APPDATA%` is virtualized under a package folder whose publisher hash is
+   * not knowable up front — so it belongs here rather than in `agentPaths`.
+   *
+   * An empty array means "Claude Desktop is not installed", which is a normal
+   * state and MUST NOT be reported as an error. Never rejects: a probe that
+   * cannot read a candidate simply omits it.
+   */
+  roots(): Promise<string[]>
+}
+
 /* ── aggregate ──────────────────────────────────────────────────────────── */
 
 export interface PlatformIntegration {
   readonly os: 'win32' | 'darwin'
   readonly focus: FocusIntegration
   readonly designWindows: DesignWindowProbe
+  readonly coworkRoots: CoworkRootProbe
   readonly processes: ProcessIntegration
   readonly terminal: TerminalIntegration
   readonly autostart: AutostartIntegration

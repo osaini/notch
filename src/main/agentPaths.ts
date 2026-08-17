@@ -11,6 +11,16 @@ export interface AgentPaths {
   codexSessions: string
   codexArchivedSessions: string
   codexSessionIndex: string
+  /**
+   * Explicit override for Claude Cowork's `local-agent-mode-sessions` tree, or
+   * `null` to let the platform probe find it.
+   *
+   * Unlike the Claude and Codex roots there is no upstream-blessed environment
+   * variable to honour here — Cowork's location is not configurable — so this is
+   * Notch's own, and exists so `verify` and the tests can be pointed at a
+   * fixture without touching the real Claude Desktop data.
+   */
+  coworkOverride: string | null
 }
 
 function configuredRoot(value: string | undefined, fallback: string): string {
@@ -44,7 +54,11 @@ export function resolveAgentPaths(
     codexRoot,
     codexSessions: path.join(codexRoot, 'sessions'),
     codexArchivedSessions: path.join(codexRoot, 'archived_sessions'),
-    codexSessionIndex: path.join(codexRoot, 'session_index.jsonl')
+    codexSessionIndex: path.join(codexRoot, 'session_index.jsonl'),
+    coworkOverride:
+      typeof env.NOTCH_COWORK_DIR === 'string' && env.NOTCH_COWORK_DIR.trim()
+        ? path.resolve(env.NOTCH_COWORK_DIR.trim())
+        : null
   }
 }
 

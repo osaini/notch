@@ -1,5 +1,6 @@
 import type { PlatformIntegration } from '../types'
 import { autostart } from './autostart'
+import { coworkRoots } from './coworkRoots'
 import { designWindows } from './designWindows'
 import { focus } from './focus'
 import { overlay } from './overlay'
@@ -17,6 +18,7 @@ export const darwinPlatform: PlatformIntegration = {
   os: 'darwin',
   focus,
   designWindows,
+  coworkRoots,
   processes,
   terminal,
   autostart,

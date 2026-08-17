@@ -223,7 +223,8 @@ function projectName(cwd: string): string {
 const AGENT_NAMES: Record<AgentKind, string> = {
   claude: 'Claude',
   codex: 'Codex',
-  'claude-design': 'Claude Design'
+  'claude-design': 'Claude Design',
+  'claude-cowork': 'Claude Cowork'
 }
 
 function mobileStatus(session: SessionState, running: boolean): MobileStatus {
@@ -241,12 +242,26 @@ function statusDetail(session: SessionState, status: MobileStatus): string {
   if (session.agent === 'claude-design') return 'Open on this computer'
   if (status === 'working') return `${AGENT_NAMES[session.agent]} is working`
   if (status === 'reviewing') return 'Review gate in progress'
-  if (status === 'idle') return 'Ready for a follow-up'
+  // Offering a follow-up the phone cannot actually send would be a lie; Cowork
+  // rows are viewable but read-only. See `canResume`.
+  if (status === 'idle') return canResume(session) ? 'Ready for a follow-up' : 'Idle on this computer'
   if (status === 'unknown') return 'Agent status is temporarily unavailable'
   return 'Waiting for you'
 }
 
+/**
+ * Agents a phone can send a follow-up to, by resuming their CLI.
+ *
+ * Cowork is deliberately absent: its conversation is driven by Claude Desktop's
+ * own loop inside a sandbox VM, so there is no `--resume` that would reattach to
+ * it. Its `local_`-prefixed session id already fails the uuid test below, but
+ * relying on that would leave the phone one upstream rename away from launching
+ * a stray agent, so the agent is checked outright.
+ */
+const RESUMABLE_AGENTS = new Set<SessionState['agent']>(['claude', 'codex'])
+
 function canResume(session: SessionState): boolean {
+  if (!RESUMABLE_AGENTS.has(session.agent)) return false
   return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(session.sessionId)
 }
 

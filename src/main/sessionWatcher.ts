@@ -14,8 +14,14 @@ import type {
 } from '@shared/types'
 import { AGENT_PATHS } from './agentPaths'
 import { ClaudeTitleReader } from './claudeTranscript'
+import { CoworkReader } from './coworkSessions'
 import { DesignWatcher, type DesignWindow } from './designWatcher'
 import { platform } from './platform'
+import { cleanTitle, isPidAlive } from './sessionUtils'
+
+// Re-exported so the one import site every session source already uses keeps
+// working; the definitions moved out only to break a cycle with `coworkSessions`.
+export { cleanTitle, isPidAlive }
 
 export const SESSIONS_DIR = AGENT_PATHS.claudeSessions
 export const CODEX_SESSIONS_DIR = AGENT_PATHS.codexSessions
@@ -93,13 +99,6 @@ function timestamp(value: unknown, fallback = 0): number {
     if (Number.isFinite(parsed)) return parsed
   }
   return fallback
-}
-
-export function cleanTitle(value: unknown): string {
-  if (typeof value !== 'string') return ''
-  const compact = value.replace(/\s+/g, ' ').trim()
-  if (!compact || compact.startsWith('<') || compact.startsWith('[')) return ''
-  return compact.length > 120 ? `${compact.slice(0, 117)}…` : compact
 }
 
 /**
@@ -213,20 +212,6 @@ async function readCodexTitleIndex(): Promise<Map<string, string>> {
     return parseCodexTitleIndex(await fsp.readFile(CODEX_SESSION_INDEX, 'utf8'))
   } catch {
     return new Map()
-  }
-}
-
-/**
- * A PID is live if signalling it does not throw ESRCH. EPERM still proves that
- * the process exists, even if it belongs to an elevated/foreign user.
- */
-export function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM'
   }
 }
 
@@ -664,6 +649,22 @@ export function snapshotChangeKey(snapshot: SessionsSnapshot): string {
   })
 }
 
+/**
+ * What Hide did, per agent, for the rows that own no killable process.
+ *
+ * `claude` is absent because a Claude Code row is ended rather than hidden.
+ */
+const HIDDEN_CODEX_MESSAGE =
+  'Codex does not expose a per-thread PID. The thread was hidden; its transcript was not deleted.'
+
+const HIDE_MESSAGES: Partial<Record<SessionState['agent'], string>> = {
+  codex: HIDDEN_CODEX_MESSAGE,
+  'claude-design':
+    'Claude Design shares one process with Claude Desktop, so it cannot be ended from here. The row was hidden; close the Design window to remove it for good.',
+  'claude-cowork':
+    'Cowork starts a fresh process for every turn, so there is nothing lasting to end. The row was hidden; the session and its transcript are untouched in Claude Desktop.'
+}
+
 export class SessionWatcher extends EventEmitter {
   private watchers: fs.FSWatcher[] = []
   private pollTimer: NodeJS.Timeout | null = null
@@ -688,6 +689,7 @@ export class SessionWatcher extends EventEmitter {
   private lastSerialized = ''
   private design = new DesignWatcher()
   private designFirstSeen = new Map<string, number>()
+  private cowork = new CoworkReader()
 
   start(): void {
     this.attachWatchers()
@@ -755,17 +757,12 @@ export class SessionWatcher extends EventEmitter {
     const session = this.snapshot.sessions.find((candidate) => candidate.key === key)
     if (!session) return { ok: false, message: 'Session is no longer available.' }
     // Only Claude Code owns a process that is safe to kill. A design row's PID
-    // is Claude Desktop itself, so killing it would take the whole app down.
+    // is Claude Desktop itself, so killing it would take the whole app down; a
+    // Cowork row's PID is one turn of a loop Claude Desktop will simply restart.
     if (session.agent !== 'claude' || !session.pid) {
       this.suppressed.add(key)
       void this.scan()
-      return {
-        ok: true,
-        message:
-          session.agent === 'claude-design'
-            ? 'Claude Design shares one process with Claude Desktop, so it cannot be ended from here. The row was hidden; close the Design window to remove it for good.'
-            : 'Codex does not expose a per-thread PID. The thread was hidden; its transcript was not deleted.'
-      }
+      return { ok: true, message: HIDE_MESSAGES[session.agent] ?? HIDDEN_CODEX_MESSAGE }
     }
 
     const identity = await platform.processes.validateClaudeProcess(
@@ -944,10 +941,11 @@ export class SessionWatcher extends EventEmitter {
       }
     }
 
-    const [codexListing, codexTitles, codexTuiProcesses] = await Promise.all([
+    const [codexListing, codexTitles, codexTuiProcesses, coworkScan] = await Promise.all([
       listJsonl(CODEX_SESSIONS_DIR),
       readCodexTitleIndex(),
-      listCodexTuiProcesses()
+      listCodexTuiProcesses(),
+      this.cowork.read(Date.now())
     ])
     let codexScanAuthoritative = codexListing.authoritative
     const codexFiles = new Set(codexListing.files)
@@ -1082,6 +1080,19 @@ export class SessionWatcher extends EventEmitter {
       if (!this.suppressed.has(session.key)) sessions.push(session)
     }
 
+    // Cowork is a surface inside Claude Desktop's ordinary window, so the only
+    // focus target it can ever have is that window. When Claude Desktop is
+    // closed there is nothing to raise, and the row says so by not offering it.
+    const coworkWindow = this.design.getMainWindow()
+    for (const session of coworkScan.sessions) {
+      if (this.suppressed.has(session.key)) continue
+      sessions.push(
+        coworkWindow
+          ? { ...session, windowHandle: coworkWindow.handle, canFocus: true }
+          : session
+      )
+    }
+
     const rank = (session: SessionState): number => {
       if (session.needsInput) return 0
       if (session.status === 'reviewing') return 1
@@ -1099,9 +1110,10 @@ export class SessionWatcher extends EventEmitter {
       prunedCount: pruned,
       parkedCount: sessions.length - visible.length,
       scannedAt: Date.now(),
-      authoritative: claudeScanAuthoritative && codexScanAuthoritative,
+      authoritative: claudeScanAuthoritative && codexScanAuthoritative && coworkScan.authoritative,
       claudeAuthoritative: claudeScanAuthoritative,
       codexAuthoritative: codexScanAuthoritative,
+      coworkAuthoritative: coworkScan.authoritative,
       error,
       designError: this.design.getError()
     })

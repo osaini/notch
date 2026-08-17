@@ -9,9 +9,12 @@ import { runPowerShell } from './powershell'
 async function focusSessionWindow(session: SessionState): Promise<SessionActionResult> {
   const startPid = session.pid && Number.isInteger(session.pid) ? session.pid : 0
   const agent = session.agent
-  // Claude Design rows carry the exact HWND, so they skip the ancestor walk
-  // entirely — this is the one case where the focused window is not a guess.
+  // Claude Design and Cowork rows carry an exact HWND, so they skip the ancestor
+  // walk entirely — the only cases where the focused window is not a guess.
+  // (For Cowork the *window* is exact; which chat it shows is Claude Desktop's.)
   const handle = /^\d+$/.test(session.windowHandle ?? '') ? session.windowHandle! : '0'
+  const exactLabel =
+    agent === 'claude-cowork' ? 'the Claude Desktop window' : 'the Claude Design window'
   const script = `
 Add-Type @"
 using System;
@@ -34,7 +37,7 @@ if ($exactHandle -ne 0) {
   $target = [IntPtr]$exactHandle
   if ([NotchUser32]::IsWindow($target)) {
     $ok = Focus-Handle $target
-    @{ found = $true; focused = $ok; process = "the Claude Design window"; exact = $true } |
+    @{ found = $true; focused = $ok; process = "${exactLabel}"; exact = $true } |
       ConvertTo-Json -Compress
     exit 0
   }

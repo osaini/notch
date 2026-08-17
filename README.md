@@ -2,7 +2,7 @@
 
 **A faux MacBook notch that tells you what your coding agents are doing.**
 
-An always-on-top status indicator for Claude Code, Codex, and Claude Design. The collapsed pill
+An always-on-top status indicator for Claude Code, Claude Cowork, Codex, and Claude Design. The collapsed pill
 shows live agent counts; hovering expands it into sessions, permission controls, usage, dispatch, a
 file tray, and settings. It answers permission prompts without you switching windows, and it never
 appears in the taskbar or Alt-Tab.
@@ -90,6 +90,8 @@ The aggregate priority is red > blue > yellow > green.
 - Claude Code — tested against 2.1.220
 - Codex is optional — tested with Codex Desktop and `codex-cli 0.130.0-alpha.5`
 - Claude Design is optional, and Windows-only — tested with Claude Desktop 1.24012.9 (MSIX)
+- Claude Cowork is optional — tested with Claude Desktop 1.30096.5 (MSIX) driving `claude-code
+  2.1.229`. The macOS data root is implemented but unverified.
 - On Windows: Windows Terminal is preferred for dispatch; a safely encoded PowerShell console is the
   fallback
 
@@ -224,6 +226,52 @@ matches the current `ToolRequestUserInputParams` schema exactly (verify with
 The flag is marked *under development* upstream and may behave unpredictably. Questions from Codex
 sessions started **outside** Notch remain view-only regardless, because only the dispatching client
 holds the app-server request needed to answer them.
+
+### Claude Cowork
+
+Cowork is not a separate protocol. It runs a real Claude Code CLI and writes the same
+`sessions/<pid>.json` files Claude Code does — it just points `CLAUDE_CONFIG_DIR` at a *per-session*
+directory instead of `~/.claude`:
+
+```text
+<Claude Desktop data>/local-agent-mode-sessions/<account>/<org>/
+  local_<uuid>.json                        title, chosen folders, timestamps, isArchived
+  local_<uuid>/.claude/sessions/<pid>.json  the same shape as ~/.claude/sessions
+  local_<uuid>/.claude/projects/…/*.jsonl   a standard Claude Code transcript
+```
+
+That single indirection is why Cowork was invisible. On Windows the data root is found by sweeping
+`%LOCALAPPDATA%\Packages\Claude_*` as well as `%APPDATA%\Claude`: the Store build is an MSIX
+package, so its `%APPDATA%\Claude` **does not exist** even though the app records un-virtualized
+`AppData\Roaming\Claude\…` paths inside its own files. Those recorded paths must never be resolved
+against disk. `NOTCH_COWORK_DIR` overrides the search.
+
+**Cowork's CLI is spawned per turn** and exits when the turn ends, so a live PID means "working right
+now" and nothing more — an idle Cowork session has no process at all. State is therefore:
+
+- a live PID under the session's `.claude/sessions/` → working
+- otherwise, activity within the last 30 minutes → idle
+- otherwise, no row
+
+Freshness is the later of `lastActivityAt` and the metadata file's mtime, because `lastActivityAt` is
+only stamped at turn boundaries and lags a running turn by minutes. Archived chats never appear.
+
+Rows are labelled with the Cowork chat title and show the folder the person chose, not the
+`local_<uuid>/outputs` scratch directory the session actually runs in.
+
+Enumeration is fixed-depth and deliberately never recursive: a session directory holds a 40 MB
+`audit.jsonl`, a full nested Claude Code home, and sits beside a multi-gigabyte VM disk image.
+Metadata files are 200–600 KB each and are cached on size and mtime, so a sweep of the real tree
+costs tens of milliseconds.
+
+There is no per-thread process worth killing — Cowork would just start another next turn — so the
+Cowork row says **Hide**. **Focus** raises Claude Desktop's main window, which is where Cowork lives;
+it cannot select an individual Cowork chat, and it is not offered while Claude Desktop is closed.
+
+**Permission controls do not reach Cowork.** Notch's hooks are merged into `~/.claude/settings.json`,
+and Cowork uses a fresh per-session config directory, so no `PermissionRequest` can arrive and a
+Cowork row never turns red. Cowork tokens are likewise absent from the Usage tab, whose scanner only
+walks `~/.claude` and `~/.codex`.
 
 ### Claude Design
 
@@ -459,8 +507,10 @@ src/
     index.ts            lifecycle, IPC composition and payload validation
     windows.ts          overlay, positioning, dragging and native hover detection
     settings.ts         persisted application settings
-    sessionWatcher.ts   Claude PID sessions + Codex rollout state + Claude Design windows
-    designWatcher.ts    Claude Design window presence: lifecycle, backoff, parsing
+    sessionWatcher.ts   Claude PID sessions + Codex rollout state + Design/Cowork rows
+    coworkSessions.ts   Claude Cowork chats: root discovery, fixed-depth scan, state
+    designWatcher.ts    Claude Desktop window presence: lifecycle, backoff, parsing
+    sessionUtils.ts     PID liveness and title cleaning, shared by every source
     hookServer.ts       HTTP hooks and pending permission decisions
     hookInstaller.ts    reversible Claude settings merge
     usage.ts            incremental Claude + Codex usage and plan caches
@@ -515,6 +565,11 @@ docs/                   design notes
 - Busy/idle, project names, or usage for Claude Design — it is a claude.ai surface with no local
   state, so window presence is all the notch can honestly report
 - Closing or terminating a Claude Design window, which shares one process with Claude Desktop
+- Permission prompts, dispatch, or usage figures for Claude Cowork — its per-session config
+  directory is out of reach of the installed hooks, and it cannot be launched from outside Claude
+  Desktop
+- Focusing an individual Cowork chat. Cowork is a surface inside Claude Desktop's one window, so
+  Focus raises that window and stops there
 - **Claude Design detection on macOS.** Not an unfinished feature — a decision. Detection matches on
   the Design window's *title*, and macOS redacts other applications' window titles without Screen
   Recording permission. Because permission grants are tied to the code signature and this app is

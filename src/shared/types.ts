@@ -1,6 +1,6 @@
 /** Types shared across main, preload and renderer. */
 
-export type AgentKind = 'claude' | 'codex' | 'claude-design'
+export type AgentKind = 'claude' | 'codex' | 'claude-design' | 'claude-cowork'
 
 /** Per-session state, after merging files with live hook signals. */
 export type AgentStatus = 'idle' | 'busy' | 'needs-input' | 'reviewing' | 'unknown'
@@ -77,6 +77,7 @@ export interface SessionsSnapshot {
   /** Per-source detail for consumers that only depend on one agent. */
   claudeAuthoritative?: boolean
   codexAuthoritative?: boolean
+  coworkAuthoritative?: boolean
   /** Set when the sessions directory could not be read at all. */
   error?: string
   /** Set when Claude Design window detection could not be kept running. */

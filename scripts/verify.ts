@@ -14,7 +14,9 @@ import {
   toDesignSessions
 } from '../src/main/sessionWatcher'
 import { lastAiTitle, projectDirName } from '../src/main/claudeTranscript'
-import { DesignWatcher, DESIGN_WINDOW_TITLES } from '../src/main/designWatcher'
+import { DesignWatcher, DESIGN_WINDOW_TITLES, parseWindows } from '../src/main/designWatcher'
+import { CoworkReader } from '../src/main/coworkSessions'
+import { platform } from '../src/main/platform'
 import {
   HookServer,
   HOOK_EVENTS,
@@ -316,6 +318,34 @@ async function checkDesign(): Promise<void> {
     fail('design rows claim a status Design does not expose')
   }
 
+  // --- classifying one sweep into design windows and the main window -------
+  const sweep = parseWindows(
+    JSON.stringify({
+      windows: [
+        { handle: '900', pid: 7, title: 'Design', design: true },
+        { handle: '500', pid: 7, title: 'Claude', design: false },
+        { handle: '300', pid: 7, title: 'Claude — something', design: false },
+        // No flag at all: a helper from an older build, or a malformed line.
+        { handle: '100', pid: 7, title: 'Design' }
+      ]
+    })
+  )
+  if (sweep.design.length === 1 && sweep.design[0].handle === '900') {
+    pass('only windows the sweep flagged as Design become design rows')
+  } else {
+    fail(`design classification returned ${sweep.design.map((w) => w.handle).join(',')}`)
+  }
+  if (sweep.main?.handle === '100') {
+    pass('the main window is the lowest-handled non-design window, stably')
+  } else {
+    fail(`main window resolved to ${sweep.main?.handle ?? 'none'}`)
+  }
+  if (parseWindows('not json').main === null && parseWindows('not json').design.length === 0) {
+    pass('a malformed sweep line yields no windows rather than throwing')
+  } else {
+    fail('a malformed sweep line produced windows')
+  }
+
   // --- live detection ------------------------------------------------------
   const watcher = new DesignWatcher()
   watcher.start()
@@ -334,6 +364,17 @@ async function checkDesign(): Promise<void> {
   } else {
     pass('design window helper ran a sweep without failing')
   }
+  const mainWindow = watcher.getMainWindow()
+  if (mainWindow) {
+    info(`Claude Desktop main window: hwnd ${mainWindow.handle} "${mainWindow.title}"`)
+    if (!DESIGN_WINDOW_TITLES.includes(mainWindow.title as (typeof DESIGN_WINDOW_TITLES)[number])) {
+      pass('the Cowork focus target is the main window, not a design window')
+    } else {
+      fail('a design window was mistaken for Claude Desktop\'s main window')
+    }
+  } else {
+    info('Claude Desktop is not running — cowork rows will offer no Focus')
+  }
   info(`open design windows: ${detected.length}`)
   for (const window of detected) info(`  hwnd ${window.handle} (pid ${window.pid}) ${window.title}`)
   if (detected.length === 0) {
@@ -342,6 +383,62 @@ async function checkDesign(): Promise<void> {
     pass('every detected window carries a usable handle and owning PID')
   } else {
     fail('a detected design window is missing its handle or PID')
+  }
+}
+
+async function checkCowork(): Promise<void> {
+  section('Claude Cowork (live tree, read-only)')
+
+  const roots = await platform.coworkRoots.roots()
+  if (roots.length === 0) {
+    info('no local-agent-mode-sessions tree found — Claude Desktop is not installed here')
+    pass('absent Cowork data is reported silently, not as an error')
+    return
+  }
+  for (const root of roots) info(`root: ${root}`)
+
+  const started = Date.now()
+  const scan = await new CoworkReader().read(Date.now())
+  const elapsed = Date.now() - started
+
+  if (scan.authoritative) {
+    pass('the Cowork sweep read the whole tree')
+  } else {
+    fail('part of the Cowork tree could not be read')
+  }
+
+  // The tree holds a 40 MB audit log per session beside a multi-GB VM image, and
+  // this runs on the 2 s session poll. A slow sweep here means the enumerator is
+  // reading something it should not be.
+  if (elapsed < 1500) {
+    pass(`sweep completed in ${elapsed}ms`)
+  } else {
+    fail(`sweep took ${elapsed}ms — it is reading more of the tree than it should`)
+  }
+
+  info(`cowork sessions listed: ${scan.sessions.length}`)
+  for (const session of scan.sessions) {
+    info(`  ${session.status.padEnd(5)} ${session.name} — ${session.cwd || session.location}`)
+  }
+  if (scan.sessions.length === 0) {
+    info('send a message in a Cowork chat to exercise the live path')
+    return
+  }
+  if (scan.sessions.every((session) => !session.canTerminate)) {
+    pass('cowork rows are hide-only — never a termination target')
+  } else {
+    fail('a cowork row claims it can be terminated')
+  }
+  if (scan.sessions.every((session) => !session.cwd || !/[\\/]outputs$/.test(session.cwd))) {
+    pass('no row shows the internal outputs scratch path')
+  } else {
+    fail('a cowork row is showing its outputs cwd instead of the chosen folder')
+  }
+  const busy = scan.sessions.filter((session) => session.status === 'busy')
+  if (busy.every((session) => session.pid && isPidAlive(session.pid))) {
+    pass('every busy cowork row is backed by a live process')
+  } else {
+    fail('a cowork row claims to be working with no live PID')
   }
 }
 
@@ -1019,6 +1116,7 @@ async function main(): Promise<void> {
   else fail('token label rounding produced an invalid 1000-unit boundary')
   await checkSessions()
   await checkDesign()
+  await checkCowork()
   await checkUsage()
   await checkHookInstall()
   await checkDispatch()

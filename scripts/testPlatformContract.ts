@@ -56,6 +56,7 @@ for (const p of platforms) {
     for (const key of [
       'focus',
       'designWindows',
+      'coworkRoots',
       'processes',
       'terminal',
       'autostart',
@@ -80,6 +81,7 @@ for (const p of platforms) {
     assert.equal(typeof p.paths.normalizeProjectPath, 'function')
     assert.equal(typeof p.paths.projectPathKey, 'function')
     assert.equal(typeof p.paths.isRevealable, 'function')
+    assert.equal(typeof p.coworkRoots.roots, 'function')
   })
 
   // ── the must-not-throw set ───────────────────────────────────────────────
@@ -241,9 +243,34 @@ for (const p of platforms) {
   })
 }
 
-console.log(
-  failures === 0
-    ? '\nPlatform contract tests passed.'
-    : `\n${failures} platform contract assertion(s) failed.`
-)
-if (failures > 0) process.exitCode = 1
+/**
+ * The one asynchronous rule in the contract, so it lives outside the sync loop.
+ *
+ * `coworkRoots.roots()` runs on the wrong OS here by design — a darwin probe
+ * reading `~/Library` on Windows, a win32 probe sweeping `%LOCALAPPDATA%` on a
+ * Mac. Both must answer "nothing found" rather than reject, because a rejection
+ * inside the session sweep would mark every source non-authoritative and freeze
+ * the whole session list.
+ */
+async function checkCoworkRoots(): Promise<void> {
+  for (const p of platforms) {
+    console.log(`\n${p.os} (async)`)
+    try {
+      const roots = await p.coworkRoots.roots()
+      assert.ok(Array.isArray(roots), 'roots() must resolve to an array')
+      for (const root of roots) assert.equal(typeof root, 'string')
+      pass('coworkRoots.roots() resolves to string[] on a foreign OS')
+    } catch (err) {
+      fail(`coworkRoots.roots() rejected — ${(err as Error).message}`)
+    }
+  }
+}
+
+void checkCoworkRoots().then(() => {
+  console.log(
+    failures === 0
+      ? '\nPlatform contract tests passed.'
+      : `\n${failures} platform contract assertion(s) failed.`
+  )
+  if (failures > 0) process.exitCode = 1
+})

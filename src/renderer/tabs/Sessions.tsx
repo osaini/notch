@@ -17,7 +17,8 @@ interface Props {
 const AGENT_LABELS: Record<SessionState['agent'], string> = {
   claude: 'CL',
   codex: 'CX',
-  'claude-design': 'CD'
+  'claude-design': 'CD',
+  'claude-cowork': 'CW'
 }
 
 function statusText(session: SessionState): string {

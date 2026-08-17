@@ -638,6 +638,7 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .session-monogram.codex { border: 1px solid var(--line-bright); color: var(--text-2); background: var(--surface); }
 .session-monogram.claude-design { background: #6b4c82; }
+.session-monogram.claude-cowork { background: #3f6b6b; }
 .session-main { min-width: 0; }
 .session-title { display: flex; align-items: center; gap: 6px; }
 .session-name { overflow: hidden; color: var(--ink); font-size: 12.5px; font-weight: 600; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }

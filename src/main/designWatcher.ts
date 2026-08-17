@@ -1,7 +1,7 @@
 ﻿import { EventEmitter } from 'node:events'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { platform } from './platform'
-import type { DesignWindow, DesignWindowProbe } from './platform/types'
+import type { ClaudeWindows, DesignWindow, DesignWindowProbe } from './platform/types'
 
 /**
  * Claude Design has no local session file. It is opened from the Claude Desktop
@@ -23,34 +23,52 @@ const SWEEP_MS = 3000
 /** Restart backoff after the helper exits, capped so a broken host stays quiet. */
 const RESTART_DELAY_MS = [2000, 5000, 15000, 60000]
 
-export type { DesignWindow }
+export type { ClaudeWindows, DesignWindow }
 
 interface RawWindow {
   handle?: unknown
   pid?: unknown
   title?: unknown
+  design?: unknown
 }
 
+const NO_WINDOWS: ClaudeWindows = { design: [], main: null }
 
-function parseWindows(line: string): DesignWindow[] {
+/**
+ * Splits a sweep into the design windows and Claude Desktop's main window.
+ *
+ * The sweep reports every visible Claude Desktop window; anything not carrying a
+ * pinned Design caption is ordinary Claude Desktop. Only the lowest-handled such
+ * window is kept as `main` — Claude Desktop shows one, and picking a stable one
+ * beats picking whichever the enumeration happened to reach first.
+ */
+export function parseWindows(line: string): ClaudeWindows {
   let parsed: { windows?: unknown }
   try {
     parsed = JSON.parse(line) as { windows?: unknown }
   } catch {
-    return []
+    return NO_WINDOWS
   }
   const raw = parsed.windows
   const list: unknown[] = Array.isArray(raw) ? raw : raw ? [raw] : []
-  const windows: DesignWindow[] = []
+  const design: DesignWindow[] = []
+  const others: DesignWindow[] = []
   for (const entry of list) {
     if (!entry || typeof entry !== 'object') continue
-    const { handle, pid, title } = entry as RawWindow
+    const { handle, pid, title, design: isDesign } = entry as RawWindow
     if (typeof handle !== 'string' || !/^\d+$/.test(handle)) continue
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) continue
-    windows.push({ handle, pid, title: typeof title === 'string' ? title : 'Design' })
-    if (windows.length >= MAX_DESIGN_WINDOWS) break
+    const window = { handle, pid, title: typeof title === 'string' ? title : 'Design' }
+    // A caption is only a Design window when the sweep says the allowlist
+    // matched it; an absent flag must never promote an ordinary window.
+    if (isDesign === true) {
+      if (design.length < MAX_DESIGN_WINDOWS) design.push(window)
+    } else if (others.length < MAX_DESIGN_WINDOWS) {
+      others.push(window)
+    }
   }
-  return windows
+  others.sort((a, b) => (BigInt(a.handle) < BigInt(b.handle) ? -1 : 1))
+  return { design, main: others[0] ?? null }
 }
 
 /**
@@ -65,7 +83,8 @@ export class DesignWatcher extends EventEmitter {
   private stopped = true
   private buffer = ''
   private windows: DesignWindow[] = []
-  private lastSerialized = '[]'
+  private mainWindow: DesignWindow | null = null
+  private lastSerialized = ''
   private failure: string | undefined
 
   constructor(private readonly probe: DesignWindowProbe = platform.designWindows) {
@@ -99,6 +118,17 @@ export class DesignWatcher extends EventEmitter {
 
   getWindows(): DesignWindow[] {
     return this.windows
+  }
+
+  /**
+   * Claude Desktop's ordinary window, when one is open.
+   *
+   * This is the focus target for Cowork rows. It is the whole app window, not a
+   * particular Cowork chat — Cowork is a surface inside it — so focusing it is
+   * "take me to Cowork", never "take me to this conversation".
+   */
+  getMainWindow(): DesignWindow | null {
+    return this.mainWindow
   }
 
   /** Set only when the helper could not be kept alive at all. */
@@ -140,15 +170,16 @@ export class DesignWatcher extends EventEmitter {
     if (this.buffer.length > 64 * 1024) this.buffer = ''
   }
 
-  private publish(windows: DesignWindow[]): void {
+  private publish(found: ClaudeWindows): void {
     // A successful sweep clears any earlier helper failure.
     this.restarts = 0
     this.failure = undefined
-    const serialized = JSON.stringify(windows)
+    const serialized = JSON.stringify(found)
     if (serialized === this.lastSerialized) return
     this.lastSerialized = serialized
-    this.windows = windows
-    this.emit('update', windows)
+    this.windows = found.design
+    this.mainWindow = found.main
+    this.emit('update', found.design)
   }
 
   private scheduleRestart(reason: string): void {
@@ -168,9 +199,11 @@ export class DesignWatcher extends EventEmitter {
   }
 
   private publishEmptyIfNeeded(): void {
-    if (this.lastSerialized === '[]') return
-    this.lastSerialized = '[]'
+    const empty = JSON.stringify(NO_WINDOWS)
+    if (this.lastSerialized === empty) return
+    this.lastSerialized = empty
     this.windows = []
+    this.mainWindow = null
     this.emit('update', this.windows)
   }
 }

@@ -5,6 +5,11 @@ import { powerShellArgs } from './powershell'
  * One long-lived PowerShell process sweeps on a timer and prints one JSON line
  * per sweep. Re-spawning `powershell.exe` every few seconds would cost more
  * than everything else the notch does combined.
+ *
+ * The sweep reports every visible Claude Desktop window and marks which ones
+ * are Design, rather than dropping the rest: the main window is what a Cowork
+ * row focuses. Classification still uses only the titles handed in, so the
+ * policy stays in `designWatcher`.
  */
 function buildScript(titles: readonly string[], sweepMs: number): string {
   const titleLiterals = titles.map((title) => `'${title.replace(/'/g, "''")}'`).join(',')
@@ -53,11 +58,14 @@ while ($true) {
       $caption = New-Object System.Text.StringBuilder 512
       [void][NotchDesignWindows]::GetWindowTextW($hWnd, $caption, $caption.Capacity)
       $title = $caption.ToString()
-      if ($designTitles -notcontains $title) { return $true }
+      # An untitled top-level window is a transient Electron shell, never
+      # something a person could be looking at.
+      if ([string]::IsNullOrWhiteSpace($title)) { return $true }
       [void]$found.Add([pscustomobject]@{
         handle = [string]$hWnd.ToInt64()
         pid = $owner
         title = $title
+        design = $designTitles -contains $title
       })
       return $true
     }
