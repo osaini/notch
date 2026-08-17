@@ -54,6 +54,9 @@ jobs:
       - name: Pill geometry
         run: npm run test:pill-geometry
 
+      - name: TEMP CIM diagnostic
+        run: npm run diag:cim
+
       - name: Interactions
         run: npm run test:interactions
 
