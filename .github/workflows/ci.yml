@@ -57,6 +57,13 @@ jobs:
       - name: Interactions
         run: npm run test:interactions
 
+      # Cowork discovery, against a fixture tree under the OS temp directory —
+      # it never reads the real Claude Desktop data, so it is safe on a runner
+      # that has none. The path-shape rules it covers differ per platform, so it
+      # earns its place on both legs.
+      - name: Cowork sessions
+        run: npm run test:cowork
+
       # Checks BOTH platforms' contracts on whichever runner this is, including
       # the invariant that no user-controlled value is ever concatenated into an
       # argument. That one guards a command-injection path reachable from the
