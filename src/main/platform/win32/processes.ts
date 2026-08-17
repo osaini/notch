@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import type { AgentProcess, ProcessIntegration } from '../types'
-import { powerShellArgs } from './powershell'
+import { POWERSHELL_QUERY_TIMEOUT_MS, powerShellArgs } from './powershell'
 
 /** Local copies: this module must not import from the flat src/main tree. */
 function recordObject(value: unknown): Record<string, unknown> | null {
@@ -45,7 +45,7 @@ $ErrorActionPreference = 'Stop'
       stdio: ['ignore', 'pipe', 'ignore']
     })
     const stdout: Buffer[] = []
-    const timer = setTimeout(() => child.kill(), 2500)
+    const timer = setTimeout(() => child.kill(), POWERSHELL_QUERY_TIMEOUT_MS)
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
     child.once('error', () => {
       clearTimeout(timer)
@@ -100,7 +100,7 @@ if ($null -eq $p) { exit 3 }
       stdio: ['ignore', 'pipe', 'ignore']
     })
     const stdout: Buffer[] = []
-    const timer = setTimeout(() => child.kill(), 2500)
+    const timer = setTimeout(() => child.kill(), POWERSHELL_QUERY_TIMEOUT_MS)
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
     child.once('error', () => {
       clearTimeout(timer)

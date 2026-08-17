@@ -1173,9 +1173,17 @@ async function testClaudeProcessIdentityGuard(): Promise<void> {
   if (process.platform !== 'win32') return
   // This test runner is Node, not Claude. A recycled PID owned by any other
   // executable must never pass the final destructive-action guard.
+  const verdict = await win32Platform.processes.validateClaudeProcess(process.pid, Date.now())
+  // `null` is a different failure from `true`, and saying which saves a CI
+  // round-trip: it means the query never produced an answer. This assertion has
+  // failed that way before, when the timeout sat on top of Windows PowerShell's
+  // one-time module warmup — see POWERSHELL_QUERY_TIMEOUT_MS.
   assert.equal(
-    await win32Platform.processes.validateClaudeProcess(process.pid, Date.now()),
-    false
+    verdict,
+    false,
+    verdict === null
+      ? 'validateClaudeProcess could not reach a verdict (PowerShell failed or was killed by its timeout), rather than rejecting a non-Claude PID'
+      : `validateClaudeProcess accepted this Node process as Claude (got ${String(verdict)})`
   )
 }
 
